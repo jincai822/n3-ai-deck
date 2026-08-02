@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -133,10 +135,8 @@ def test_strict_fixture_runtime_reads_only_allowlisted_paths(
     monkeypatch.setattr(discovery, "_read_attribute", recording_reader)
 
     assert discover_usb_devices(tmp_path).devices
-    main = getattr(discovery, "main", None)
-    if callable(main):
-        assert main(["--sysfs-root", str(tmp_path), "--json"]) == 0
-        capsys.readouterr()
+    assert discovery.main(["--sysfs-root", str(tmp_path), "--json"]) == 0
+    capsys.readouterr()
     assert observed_paths
     assert all(path.name != "serial" for path in observed_paths)
 
@@ -211,6 +211,61 @@ print("\\n".join(sorted(sys.modules)))
     assert not any(
         module_name.startswith(forbidden_prefixes) for module_name in result.stdout.splitlines()
     )
+    assert "ctypes" not in result.stdout.splitlines()
+
+
+def test_detection_console_script_targets_discovery_main() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert project["scripts"]["n3-ai-deck-detect"] == "streamdock_n3.discovery:main"
+
+
+def test_installed_entry_point_help_keeps_forbidden_modules_unloaded() -> None:
+    script = """
+import contextlib
+import io
+import json
+import sys
+from importlib.metadata import entry_points
+
+entry_point = next(
+    item for item in entry_points(group="console_scripts")
+    if item.name == "n3-ai-deck-detect"
+)
+main = entry_point.load()
+with contextlib.redirect_stdout(io.StringIO()):
+    try:
+        main(["--help"])
+    except SystemExit as error:
+        assert error.code == 0
+    else:
+        raise AssertionError("argparse help did not exit")
+print(json.dumps(sorted(sys.modules)))
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    loaded_modules = json.loads(result.stdout)
+    forbidden_prefixes = ("streamdock_n3._vendor", "evdev", "pyudev", "gi")
+
+    assert not any(name.startswith(forbidden_prefixes) for name in loaded_modules)
+    assert "ctypes" not in loaded_modules
+
+
+def test_help_exits_before_scanner_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden_scanner(root: Path = discovery.DEFAULT_SYSFS_ROOT) -> discovery.DiscoveryReport:
+        raise AssertionError(f"scanner unexpectedly called for {root.name}")
+
+    monkeypatch.setattr(discovery, "discover_usb_devices", forbidden_scanner)
+
+    with pytest.raises(SystemExit) as raised:
+        discovery.main(["--help"])
+
+    assert raised.value.code == 0
 
 
 def test_reader_boundary_has_exact_signature() -> None:

@@ -50,6 +50,7 @@ Changelog = "https://github.com/jincai822/n3-ai-deck/blob/main/CHANGELOG.md"
 Upstream = "https://github.com/asad-albadi/streamdock-n3"
 
 [project.scripts]
+n3-ai-deck-detect = "streamdock_n3.discovery:main"
 streamdock-n3 = "streamdock_n3.daemon:main"
 streamdock-n3-gui = "streamdock_n3.gui:main"
 streamdock-n3-debug = "streamdock_n3.debug_tool:main"

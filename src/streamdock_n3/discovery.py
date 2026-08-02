@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 from streamdock_n3.device_catalog import (
     TARGET_USB_ID,
@@ -483,3 +486,85 @@ def exit_code_for(report: DiscoveryReport) -> int:
     if any(device.target_match for device in report.devices):
         return 3
     return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the sysfs-only command-line parser without scanning hardware."""
+    parser = argparse.ArgumentParser(
+        prog="n3-ai-deck-detect",
+        description=(
+            "Inspect cataloged USB IDs using read-only sysfs metadata. This sysfs-only "
+            "command does not confirm device identity or protocol compatibility."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit the stable JSON discovery contract",
+    )
+    parser.add_argument(
+        "--sysfs-root",
+        type=Path,
+        default=DEFAULT_SYSFS_ROOT,
+        metavar="PATH",
+        help="read USB metadata from PATH (default: /sys/bus/usb/devices)",
+    )
+    return parser
+
+
+def render_human(report: DiscoveryReport) -> str:
+    """Render a deterministic report containing only public schema fields."""
+    lines = ["N3 AI Deck read-only sysfs discovery"]
+    if not report.root_available:
+        lines.append("Discovery root unavailable.")
+    elif not report.devices:
+        lines.append("No cataloged USB ID matches found.")
+
+    for device in report.devices:
+        lines.extend(
+            (
+                f"USB ID match {device.vid}:{device.pid}: {device.catalog_name}",
+                f"  sysfs name: {device.sysfs_name}",
+                f"  identity not confirmed ({device.identity_status})",
+                f"  protocol unvalidated ({device.protocol_status})",
+                f"  bcdDevice: {device.bcd_device or 'unknown'}",
+                f"  interface selection: {device.interface_selection}",
+            )
+        )
+        if device.hid_interfaces:
+            lines.append("  HID interfaces:")
+            for interface in device.hid_interfaces:
+                lines.append(
+                    "    "
+                    f"{interface.number}: class {interface.class_code}, "
+                    f"subclass {interface.subclass}, protocol {interface.protocol}"
+                )
+        else:
+            lines.append("  HID interfaces: none")
+
+    if report.warnings:
+        lines.append("Warnings:")
+        for warning in report.warnings:
+            detail = f" (attribute: {warning.attribute})" if warning.attribute else ""
+            lines.append(f"  {warning.code.value}{detail}")
+
+    lines.append(
+        "Safety note: read-only sysfs discovery; identity not confirmed; "
+        "protocol unvalidated and compatibility not established."
+    )
+    return "\n".join(lines)
+
+
+def render_json(report: DiscoveryReport) -> str:
+    """Render the stable, closed JSON discovery contract."""
+    return json.dumps(report.to_dict(), ensure_ascii=True, indent=2)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run one passive sysfs scan and return the discovery contract exit code."""
+    args = build_parser().parse_args(argv)
+    sysfs_root = cast(Path, args.sysfs_root)
+    use_json = cast(bool, args.json)
+    report = discover_usb_devices(sysfs_root)
+    print(render_json(report) if use_json else render_human(report))
+    return exit_code_for(report)
