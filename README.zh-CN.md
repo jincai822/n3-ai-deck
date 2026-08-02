@@ -8,7 +8,7 @@
 
 **N3 AI Deck 是面向 Linux 和妙联宝/Mirabox N3 V3.0 的开源、本地优先 AI 生产力控制台。** 项目目标是把六个 LCD 按键、三个圆形按键和三个旋钮变成可视、可重复的 AI 与桌面自动化工作流入口。
 
-> **Early Preview：** 当前 N3 V3.0（`6602:1000`）已经完成 USB/HID 层识别，但初始化、输入控件、亮度和 LCD 写入尚未完成真机验证。现在不要把该分支作为设备驱动安装。
+> **Early Preview：** `6602:1000` 是机主报告为 N3 V3.0 的 USB ID 候选。其物理型号身份未确认，协议兼容性、初始化、输入控件、亮度和 LCD 写入尚未完成真机验证。现在不要把该分支作为设备驱动安装。
 
 ## 可以用来做什么
 
@@ -22,12 +22,25 @@
 
 | 硬件 | USB ID | 状态 |
 |---|---:|---|
-| 妙联宝 N3 V3.0 | `6602:1000` | 已识别，写入操作尚未验证 |
+| 机主报告的 N3 V3.0 候选 | `6602:1000` | USB ID 候选；身份未确认；协议与写入操作尚未验证 |
 | FHOOU/Mirabox N3 参考型号 | `6603:1003` | 上游已支持，等待 N3 AI Deck 重新验证 |
 
-当前代码保留了上游项目可工作的 Linux 后台服务和 GTK4 界面。目标架构计划在此基础上增加更安全的设备边界，以及面向 AI 的动作与插件架构；这些 N3 AI Deck 层在 M0 尚未实现。发布门槛见 [ROADMAP.md](ROADMAP.md)。
+当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构仍计划增加主动设备边界，以及面向 AI 的动作与插件架构。发布门槛见 [ROADMAP.md](ROADMAP.md)。
 
 > **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称。继承的 `0.2.5` 只表示上游版本脉络，并非 N3 AI Deck 的发布版本；命名和版本方案将在 `v0.1.0` 之前解决。
+
+## 安全只读发现（M1）
+
+使用专用的 M1 命令，只检查经允许的 sysfs USB 与 HID 属性，不打开设备节点：
+
+```bash
+uv run n3-ai-deck-detect
+uv run n3-ai-deck-detect --json
+```
+
+`6602:1000` 仅是 USB ID 候选：身份未确认，且该命令不证明协议兼容性。报告可能显示多个 HID 候选，并且不会选择任何一个接口进行设备访问。M1 路径只读取 allowlisted sysfs 属性；不会初始化硬件，也不会访问 `/dev` 节点。
+
+继承的 daemon、probe、debug、GUI 和 install 命令不在 M1 的只读保证范围内，M1 中不得用于 `6602:1000`。这包括 `streamdock-n3`、`streamdock-n3-probe`、`streamdock-n3-debug`、`streamdock-n3-gui` 和 `streamdock-n3-install`。
 
 ## 规划中的执行链路
 
@@ -47,7 +60,7 @@ N3 按键或旋钮
 
 ## 本地开发
 
-M0 开发阶段不会访问已连接硬件：
+M1 自动化开发不会访问已连接硬件：
 
 ```bash
 uv sync --extra dev
