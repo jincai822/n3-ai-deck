@@ -270,6 +270,7 @@ def test_fresh_wheel_build_failure_includes_captured_output(
         test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path)
     message = str(raised.value)
     assert "fresh wheel build failed:" in message
+    assert "returncode=1" in message
     assert "simulated wheel stdout" in message
     assert "simulated wheel stderr" in message
 
