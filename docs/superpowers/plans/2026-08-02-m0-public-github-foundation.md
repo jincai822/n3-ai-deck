@@ -1,9 +1,9 @@
 # M0 Public GitHub Foundation Implementation Plan
 
 > **Historical scope note (2026-08-03):** M0 is complete. The
-> [formal M1 PRD](../../../tasks/prd-n3-v3-read-only-discovery.md) proposes a safer
-> passive-discovery definition for M1. Until product-owner approval, that proposal does
-> not retroactively change this historical M0 plan or the previously approved design.
+> [formal M1 PRD](../../../tasks/prd-n3-v3-read-only-discovery.md) now defines the
+> approved passive-discovery scope for M1. It does not retroactively change this
+> historical M0 plan; it supersedes only the earlier M1 clauses it names explicitly.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

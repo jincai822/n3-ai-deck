@@ -5,12 +5,12 @@
 **Owner:** `jincai822`  
 **Planned repository:** `jincai822/n3-ai-deck`
 
-> **Proposed M1 safety amendment (2026-08-03):** Technical review found that the
+> **Approved M1 safety amendment (2026-08-03):** Technical review found that the
 > vendored SDK registry can lead to active device access. The formal
-> [M1 read-only discovery PRD](../../../tasks/prd-n3-v3-read-only-discovery.md) proposes
+> [M1 read-only discovery PRD](../../../tasks/prd-n3-v3-read-only-discovery.md) defines
 > a passive sysfs-only M1 and moves active SDK registration and udev changes to M2.
-> This proposal does not supersede the approved clauses below until the product owner
-> explicitly approves the amendment.
+> The product owner approved this amendment; it supersedes this document's M1 interface
+> selection and exact-permission requirements while leaving later hardware gates intact.
 
 ## 1. Decision summary
 
