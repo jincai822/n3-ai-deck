@@ -3,7 +3,7 @@
   "milestone": "M1",
   "title": "Safe N3 V3.0 read-only discovery",
   "source_prd": "tasks/prd-n3-v3-read-only-discovery.md",
-  "execution_status": "authorized",
+  "execution_status": "complete",
   "execution_policy": {
     "mode": "automated_with_human_hardware_gates",
     "allowed": [
@@ -34,7 +34,7 @@
       "id": "M1-01",
       "title": "Passive USB device catalog",
       "depends_on": [],
-      "state": "pending",
+      "state": "complete",
       "deliverable": "Typed stdlib-only catalog for 6602:1000 and the 6603:1003 upstream reference with separate identity and protocol states.",
       "focused_test": "uv run pytest tests/test_device_catalog.py -v"
     },
@@ -42,7 +42,7 @@
       "id": "M1-02",
       "title": "Safe sysfs scanner",
       "depends_on": ["M1-01"],
-      "state": "pending",
+      "state": "complete",
       "deliverable": "Deterministic observations from trusted real sysfs or strict fixture roots without SDK or /dev access.",
       "focused_test": "uv run pytest tests/test_discovery.py tests/test_discovery_safety.py -v"
     },
@@ -50,7 +50,7 @@
       "id": "M1-03",
       "title": "Human and JSON detection CLI",
       "depends_on": ["M1-02"],
-      "state": "pending",
+      "state": "complete",
       "deliverable": "n3-ai-deck-detect entry point with closed JSON schema and exit codes 0, 1, 2, and 3.",
       "focused_test": "uv run pytest tests/test_discovery_cli.py tests/test_discovery_safety.py -v"
     },
@@ -58,7 +58,7 @@
       "id": "M1-04",
       "title": "Public safety documentation and package gate",
       "depends_on": ["M1-03"],
-      "state": "pending",
+      "state": "complete",
       "deliverable": "Bilingual safe-use documentation, architecture boundary, package entry-point smoke test, and publication assertions.",
       "focused_test": "uv run pytest tests/test_public_project.py tests/test_discovery_safety.py -v"
     },
@@ -66,7 +66,7 @@
       "id": "M1-05",
       "title": "Real-device read-only acceptance",
       "depends_on": ["M1-04"],
-      "state": "pending",
+      "state": "complete",
       "deliverable": "Non-sensitive validation record showing the candidate USB ID, bcdDevice, two HID interfaces, and ambiguous interface selection.",
       "focused_test": "uv run n3-ai-deck-detect --json"
     }

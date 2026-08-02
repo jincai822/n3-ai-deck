@@ -188,7 +188,7 @@ def test_required_public_documents_cover_launch_contract() -> None:
             assert phrase.lower() in text.lower()
 
 
-def test_public_documents_do_not_expose_connected_device_serial() -> None:
+def test_public_documents_do_not_expose_connected_device_details() -> None:
     documents = "\n".join(
         read_text(path)
         for path in (
@@ -199,10 +199,20 @@ def test_public_documents_do_not_expose_connected_device_serial() -> None:
             "ACKNOWLEDGEMENTS.md",
             "SECURITY.md",
             "CONTRIBUTING.md",
+            "docs/validation/2026-08-03-n3-v3-read-only-discovery.md",
         )
     )
     for raw_serial_marker in ("ID_SERIAL_SHORT=", "iSerial=", "serial_number="):
         assert raw_serial_marker not in documents
+    for machine_root in ("/home", "/srv", "/Users"):
+        assert machine_root not in documents
+    for sensitive_pattern in (
+        re.compile(r"/dev/hidraw\d+"),
+        re.compile(r"/dev/input/event\d+"),
+        re.compile(r"\bsysfs_name\b"),
+        re.compile(r"(?<![-\d])\d+-\d+(?::\d+\.\d+)?(?![-\d])"),
+    ):
+        assert sensitive_pattern.search(documents) is None
 
 
 def test_github_templates_collect_status_and_safety_evidence() -> None:

@@ -16,15 +16,17 @@ M1's approved testable scope and safety boundary are defined in
 
 ## M1 — Safe N3 V3.0 discovery
 
-**Status:** In progress — safety amendment approved
+**Status:** Complete — read-only discovery only
 
-- Add a passive `6602:1000` catalog entry without activating the vendored SDK.
-- Prove sysfs-only discovery and report the matching candidate's HID interface topology.
-- Do not open `/dev`, install permissions, or select an active HID interface in M1.
+- [x] Add a passive `6602:1000` catalog entry without activating the vendored SDK.
+- [x] Prove sysfs-only discovery and report the matching candidate's HID interface topology.
+- [x] Do not open `/dev`, install permissions, or select an active HID interface in M1.
 
 ## M2 — Hardware controls
 
-- Design the exact udev permission and activate the SDK mapping only after manual approval.
+**Status:** Pending
+
+- SDK activation and udev permission design both require manual approval before any M2 work.
 - Validate keys, round buttons, knobs, brightness, and all six LCD keys in staged manual tests.
 
 ## M3 — Extensible action engine
