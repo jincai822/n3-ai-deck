@@ -524,6 +524,7 @@ Commit: `docs: publish M1 read-only discovery guidance`
 
 **Files:**
 - Create: `docs/validation/2026-08-03-n3-v3-read-only-discovery.md`
+- Modify: `tests/test_public_project.py`
 - Modify: `ROADMAP.md`
 - Modify: `tasks/m1-ai-coding-queue.json`
 
