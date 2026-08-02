@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -174,23 +177,28 @@ def test_tracked_publication_text_has_no_local_paths_or_obvious_tokens() -> None
     tracked = subprocess.check_output(
         ["git", "ls-files", "-z"], cwd=ROOT
     ).decode().split("\0")
-    skipped_parts = {
-        "_vendor",
-        ".venv",
-        "dist",
-        "build",
-        ".pytest_cache",
-        ".ruff_cache",
-        "__pycache__",
+    binary_suffixes = {
+        ".dll",
+        ".dylib",
+        ".gif",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".lib",
+        ".pdf",
+        ".png",
+        ".so",
+        ".woff",
+        ".woff2",
     }
-    forbidden_prefixes = (
-        "/home/" + "asad/",
-        "/home/" + "cj1024/",
-        "/srv/" + "workspaces/",
+    machine_path_patterns = (
+        re.compile("/" + r"(?:home|Users)/[^/\s]+(?:/[^/\s]+)+"),
+        re.compile("/" + r"srv(?:/[^/\s]+)+"),
     )
     token_patterns = (
         re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
         re.compile(r"gh(?:p|o|u|s|r)_[A-Za-z0-9]{20,}"),
+        re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     )
     findings: list[str] = []
 
@@ -198,7 +206,7 @@ def test_tracked_publication_text_has_no_local_paths_or_obvious_tokens() -> None
         if not relative_path:
             continue
         path = Path(relative_path)
-        if skipped_parts.intersection(path.parts):
+        if path.suffix.lower() in binary_suffixes:
             continue
         data = (ROOT / path).read_bytes()
         if b"\0" in data:
@@ -207,9 +215,40 @@ def test_tracked_publication_text_has_no_local_paths_or_obvious_tokens() -> None
             text = data.decode("utf-8")
         except UnicodeDecodeError:
             continue
-        if any(prefix in text for prefix in forbidden_prefixes):
+        if any(pattern.search(text) for pattern in machine_path_patterns):
             findings.append(relative_path)
         if any(pattern.search(text) for pattern in token_patterns):
             findings.append(relative_path)
 
     assert not findings, f"publication-sensitive text found in: {sorted(set(findings))}"
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "sensitive_text"),
+    (
+        ("src/package/_vendor/source.py", "/" + "home/" + "reviewer/private/file"),
+        ("notes.txt", "/" + "home/" + "builder/project"),
+        ("notes.txt", "/" + "srv/" + "builds/project"),
+        ("notes.txt", "/" + "Users/" + "developer/project"),
+        ("notes.txt", "github_" + "pat_" + "A" * 30),
+    ),
+)
+def test_tracked_publication_scan_rejects_general_paths_and_vendor_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative_path: str,
+    sensitive_text: str,
+) -> None:
+    subprocess.run(
+        ["git", "init", "--quiet"], cwd=tmp_path, check=True
+    )
+    fixture_path = tmp_path / relative_path
+    fixture_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture_path.write_text(sensitive_text, encoding="utf-8")
+    subprocess.run(
+        ["git", "add", relative_path], cwd=tmp_path, check=True
+    )
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match="publication-sensitive text"):
+        test_tracked_publication_text_has_no_local_paths_or_obvious_tokens()
