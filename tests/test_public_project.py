@@ -59,3 +59,34 @@ def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english
     assert "streamdock-n3-install" not in english
+
+
+def test_required_public_documents_cover_launch_contract() -> None:
+    requirements = {
+        "ROADMAP.md": ("M0", "M5", "v0.1.0"),
+        "docs/ARCHITECTURE.md": ("Device adapter", "Open Core", "structured result"),
+        "ACKNOWLEDGEMENTS.md": ("asad-albadi/streamdock-n3", "StreamDock Device SDK", "MIT"),
+        "SECURITY.md": ("private vulnerability reporting", "API keys", "device serial"),
+        "CONTRIBUTING.md": ("uv run pytest", "hardware write", "pull request"),
+    }
+    for path, expected_phrases in requirements.items():
+        text = read_text(path)
+        for phrase in expected_phrases:
+            assert phrase.lower() in text.lower()
+
+
+def test_public_documents_do_not_expose_connected_device_serial() -> None:
+    documents = "\n".join(
+        read_text(path)
+        for path in (
+            "README.md",
+            "README.zh-CN.md",
+            "ROADMAP.md",
+            "docs/ARCHITECTURE.md",
+            "ACKNOWLEDGEMENTS.md",
+            "SECURITY.md",
+            "CONTRIBUTING.md",
+        )
+    )
+    for raw_serial_marker in ("ID_SERIAL_SHORT=", "iSerial=", "serial_number="):
+        assert raw_serial_marker not in documents
