@@ -10,7 +10,7 @@ body:
     id: usb-id
     attributes:
       label: USB ID
-      description: "VID:PID only, for example 6602:1000. Never include the serial."
+      description: "VID:PID only, for example 1234:abcd. Never include the serial."
     validations:
       required: true
   - type: textarea

@@ -98,6 +98,8 @@ def test_github_templates_collect_status_and_safety_evidence() -> None:
     pull_request = read_text(".github/pull_request_template.md")
     assert "USB ID" in bug
     assert "serial" in bug.lower()
+    assert "1234:abcd" in bug
+    assert "6602:1000" not in bug
     assert "customer outcome" in feature.lower()
     assert "Hardware access" in pull_request
     assert "Upstream / license impact" in pull_request
