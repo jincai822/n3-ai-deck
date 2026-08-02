@@ -224,12 +224,16 @@ def test_detection_console_script_targets_discovery_main() -> None:
 
 def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "wheel"
-    subprocess.run(
+    build = subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
         cwd=ROOT,
-        check=True,
         capture_output=True,
         text=True,
+    )
+    assert build.returncode == 0, (
+        f"fresh wheel build failed: returncode={build.returncode}\n"
+        f"stdout:\n{build.stdout}\n"
+        f"stderr:\n{build.stderr}"
     )
 
     wheels = sorted(wheel_dir.glob("*.whl"))
@@ -247,6 +251,27 @@ def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Pat
             "streamdock_n3/discovery.py",
         ):
             assert module in contents, f"fresh wheel is missing {module}"
+
+
+def test_fresh_wheel_build_failure_includes_captured_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failed_build(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=1,
+            stdout="simulated wheel stdout",
+            stderr="simulated wheel stderr",
+        )
+
+    monkeypatch.setattr(subprocess, "run", failed_build)
+
+    with pytest.raises(AssertionError) as raised:
+        test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path)
+    message = str(raised.value)
+    assert "fresh wheel build failed:" in message
+    assert "simulated wheel stdout" in message
+    assert "simulated wheel stderr" in message
 
 
 def test_installed_entry_point_help_keeps_forbidden_modules_unloaded() -> None:
