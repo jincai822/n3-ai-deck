@@ -1,12 +1,12 @@
 # Architecture
 
-N3 AI Deck evolves the existing `streamdock_n3` package incrementally. M0 changes repository presentation only; device behavior changes begin in M1. Everything below describes the planned target architecture, not capabilities available in M0.
+N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active SDK/device adapter work is planned M2 work. Everything below describes the planned target architecture beyond that implemented M1 discovery boundary.
 
 ## Public components
 
 ### Device adapter
 
-The planned responsibility is to own supported USB identifiers, SDK/HID access, lifecycle, input, brightness, and LCD operations. The target behavior is to fail closed for unknown identifiers.
+The planned responsibility is to own active supported USB identifiers, SDK/HID access, lifecycle, input, brightness, and LCD operations. The target behavior is to fail closed for unknown identifiers. It is deliberately separate from M1's passive catalog, which neither opens devices nor establishes protocol compatibility.
 
 ### Event and action engine
 
@@ -18,7 +18,7 @@ The planned responsibility is to define metadata, configuration validation, exec
 
 ### Local UI and diagnostics
 
-The planned responsibility is to show device/action state and separate read-only discovery from hardware writes.
+The planned responsibility is to show device/action state and separate read-only discovery from hardware writes. The implemented M1 `discovery.py` command reads only allowlisted sysfs metadata and can report multiple HID candidates without choosing an interface.
 
 ## Target data flow
 

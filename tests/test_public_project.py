@@ -60,6 +60,58 @@ def test_bilingual_readmes_are_honest_early_preview_pages() -> None:
     assert "尚未完成真机验证" in chinese
 
 
+def test_readmes_publish_m1_read_only_discovery_boundary() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+
+    for command in (
+        "uv run n3-ai-deck-detect",
+        "uv run n3-ai-deck-detect --json",
+    ):
+        assert command in english
+        assert command in chinese
+
+    for required in (
+        "candidate",
+        "identity not confirmed",
+        "sysfs",
+        "daemon, probe, debug, GUI, and install",
+        "outside M1's read-only guarantee",
+    ):
+        assert required in english
+
+    for required in (
+        "候选",
+        "身份未确认",
+        "sysfs",
+        "daemon、probe、debug、GUI 和 install",
+        "不在 M1 的只读保证范围内",
+    ):
+        assert required in chinese
+
+    for text in (english, chinese):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
+def test_architecture_documents_m1_passive_and_m2_active_boundaries() -> None:
+    architecture = read_text("docs/ARCHITECTURE.md")
+
+    for required in (
+        "device_catalog.py",
+        "discovery.py",
+        "ProductIDs.g_products",
+        "passive",
+        "active",
+        "implemented in M1",
+        "planned M2 work",
+        "not ProductIDs.g_products",
+    ):
+        assert required in architecture
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english

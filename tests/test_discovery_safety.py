@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tomllib
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ import pytest
 import streamdock_n3.discovery as discovery
 from streamdock_n3.discovery import discover_usb_devices
 
+ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_MODULES = (
     Path("src/streamdock_n3/device_catalog.py"),
     Path("src/streamdock_n3/discovery.py"),
@@ -218,6 +220,33 @@ def test_detection_console_script_targets_discovery_main() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
 
     assert project["scripts"]["n3-ai-deck-detect"] == "streamdock_n3.discovery:main"
+
+
+def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Path) -> None:
+    wheel_dir = tmp_path / "wheel"
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    wheels = sorted(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1, f"expected exactly one fresh wheel in {wheel_dir}, found: {wheels}"
+
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        entry_points = [name for name in wheel.namelist() if name.endswith(".dist-info/entry_points.txt")]
+        assert len(entry_points) == 1, f"expected one entry_points.txt in {wheels[0].name}"
+        assert "n3-ai-deck-detect = streamdock_n3.discovery:main" in wheel.read(
+            entry_points[0]
+        ).decode("utf-8")
+        contents = set(wheel.namelist())
+        for module in (
+            "streamdock_n3/device_catalog.py",
+            "streamdock_n3/discovery.py",
+        ):
+            assert module in contents, f"fresh wheel is missing {module}"
 
 
 def test_installed_entry_point_help_keeps_forbidden_modules_unloaded() -> None:

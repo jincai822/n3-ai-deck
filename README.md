@@ -8,7 +8,7 @@
 
 **N3 AI Deck is an open-source, local-first AI productivity console for the Mirabox/妙联宝 N3 V3.0 on Linux.** It aims to turn six LCD keys, three round buttons, and three knobs into visible, repeatable AI and desktop automation workflows.
 
-> **Early Preview:** the connected N3 V3.0 (`6602:1000`) has been identified at the USB/HID level, but initialization, input controls, brightness, and LCD writes are not yet validated. Do not install this branch as a device driver yet.
+> **Early Preview:** `6602:1000` is an owner-reported N3 V3.0 USB ID candidate. Its physical identity is not confirmed, and its protocol compatibility, initialization, input controls, brightness, and LCD writes are not yet validated. Do not install this branch as a device driver yet.
 
 ## What it is for
 
@@ -22,12 +22,25 @@
 
 | Hardware | USB ID | Status |
 |---|---:|---|
-| 妙联宝 N3 V3.0 | `6602:1000` | Detected; write operations not yet validated |
+| Owner-reported N3 V3.0 candidate | `6602:1000` | USB ID candidate; identity not confirmed; protocol and write operations not yet validated |
 | FHOOU/Mirabox N3 reference variant | `6603:1003` | Supported by upstream; N3 AI Deck revalidation pending |
 
-The current source retains the working Linux daemon and GTK4 GUI from the upstream project. The target architecture plans a safer device boundary and an AI-oriented action/plugin architecture; those N3 AI Deck layers are not implemented in M0. See [ROADMAP.md](ROADMAP.md) for release gates.
+The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture still plans the active device boundary and AI-oriented action/plugin architecture. See [ROADMAP.md](ROADMAP.md) for release gates.
 
 > **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names. The inherited `0.2.5` version records upstream lineage and is not an N3 AI Deck release. Naming and versioning will be resolved before `v0.1.0`.
+
+## Safe read-only discovery (M1)
+
+Use the dedicated M1 command to inspect the approved sysfs USB and HID attributes without opening device nodes:
+
+```bash
+uv run n3-ai-deck-detect
+uv run n3-ai-deck-detect --json
+```
+
+`6602:1000` is only a USB ID candidate: identity is not confirmed and the command does not prove protocol compatibility. The report may show multiple HID candidates, and it deliberately does not select one for device access. This M1 path reads only allowlisted sysfs attributes; it does not initialize hardware or access `/dev` nodes.
+
+The inherited daemon, probe, debug, GUI, and install commands are outside M1's read-only guarantee and must not be used for `6602:1000` in M1. Their corresponding legacy entry points are not safe substitutes for this command.
 
 ## Planned flow
 
@@ -47,7 +60,7 @@ The planned public core is intended to contain device communication, local actio
 
 ## Development
 
-M0 development does not access attached hardware:
+M1 automated development does not access attached hardware:
 
 ```bash
 uv sync --extra dev
