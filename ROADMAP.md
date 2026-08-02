@@ -2,6 +2,11 @@
 
 N3 AI Deck is an Early Preview. Milestone completion requires evidence; dates are intentionally secondary to safe hardware validation.
 
+The formal product review draft is in [the N3 AI Deck PRD](tasks/prd-n3-ai-deck.md).
+M1's proposed testable scope and safety boundary are defined in
+[the read-only discovery PRD](tasks/prd-n3-v3-read-only-discovery.md). The M1 scope
+amendment remains proposed until the product owner approves it.
+
 ## M0 — Public foundation
 
 **Status:** Complete
@@ -12,11 +17,16 @@ N3 AI Deck is an Early Preview. Milestone completion requires evidence; dates ar
 
 ## M1 — Safe N3 V3.0 discovery
 
-- Add exact `6602:1000` registration and narrowly scoped Linux permissions.
-- Prove read-only discovery of the intended HID interface.
+**Status:** Proposed safety amendment; approval pending
+
+- Add a passive `6602:1000` catalog entry without activating the vendored SDK.
+- Prove sysfs-only discovery and report the matching candidate's HID interface topology.
+- Do not open `/dev`, install permissions, or select an active HID interface in M1.
 
 ## M2 — Hardware controls
 
+- Under the proposed M1 amendment, design the exact udev permission and activate the SDK
+  mapping only after manual approval.
 - Validate keys, round buttons, knobs, brightness, and all six LCD keys in staged manual tests.
 
 ## M3 — Extensible action engine

@@ -5,6 +5,13 @@
 **Owner:** `jincai822`  
 **Planned repository:** `jincai822/n3-ai-deck`
 
+> **Proposed M1 safety amendment (2026-08-03):** Technical review found that the
+> vendored SDK registry can lead to active device access. The formal
+> [M1 read-only discovery PRD](../../../tasks/prd-n3-v3-read-only-discovery.md) proposes
+> a passive sysfs-only M1 and moves active SDK registration and udev changes to M2.
+> This proposal does not supersede the approved clauses below until the product owner
+> explicitly approves the amendment.
+
 ## 1. Decision summary
 
 N3 AI Deck will be an independent public GitHub project built from the history of
@@ -306,4 +313,3 @@ The initial GitHub repository is ready to publicize when:
 5. Configure it as `origin`, retain the source repository as `upstream`, and push `main`.
 6. Verify the public landing page, license, default branch, topics, and repository settings.
 7. Begin M1 hardware compatibility work on a focused feature branch.
-
