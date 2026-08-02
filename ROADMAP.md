@@ -4,11 +4,11 @@ N3 AI Deck is an Early Preview. Milestone completion requires evidence; dates ar
 
 ## M0 — Public foundation
 
-**Status:** In progress
+**Status:** Complete
 
-- [ ] Independent repository identity and bilingual landing pages.
-- [ ] Attribution, governance, and passing public CI.
-- [ ] No device writes, tags, or release artifacts.
+- [x] Independent repository identity and bilingual landing pages.
+- [x] Attribution, governance, and passing public CI.
+- [x] No device writes, tags, or release artifacts.
 
 ## M1 — Safe N3 V3.0 discovery
 
