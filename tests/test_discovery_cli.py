@@ -28,6 +28,15 @@ def add_target(root: Path, *, bcd: str | None = "0300", with_hid: bool = False) 
             write_attr(root / "1-2:1.0", name, value)
 
 
+def add_upstream_reference(root: Path) -> None:
+    for name, value in (
+        ("idVendor", "6603"),
+        ("idProduct", "1003"),
+        ("bcdDevice", "0100"),
+    ):
+        write_attr(root / "2-1", name, value)
+
+
 def test_json_output_has_closed_deterministic_schema(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -67,6 +76,21 @@ def test_human_output_is_explicitly_candidate_only(
     assert "protocol unvalidated" in output
     assert "read-only sysfs" in output
     assert "supported" not in output.lower()
+
+
+def test_upstream_reference_human_protocol_status_matches_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    add_upstream_reference(tmp_path)
+
+    assert discovery.main(["--sysfs-root", str(tmp_path)]) == 1
+    human_output = capsys.readouterr().out
+    assert discovery.main(["--sysfs-root", str(tmp_path), "--json"]) == 1
+    json_output = json.loads(capsys.readouterr().out)
+
+    assert json_output["devices"][0]["protocol_status"] == "upstream_reference"
+    assert "protocol status: upstream_reference" in human_output
+    assert "protocol unvalidated (upstream_reference)" not in human_output
 
 
 @pytest.mark.parametrize(

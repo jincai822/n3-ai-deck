@@ -521,12 +521,17 @@ def render_human(report: DiscoveryReport) -> str:
         lines.append("No cataloged USB ID matches found.")
 
     for device in report.devices:
+        protocol_line = (
+            f"  protocol unvalidated ({device.protocol_status})"
+            if device.protocol_status == "unvalidated"
+            else f"  protocol status: {device.protocol_status}"
+        )
         lines.extend(
             (
                 f"USB ID match {device.vid}:{device.pid}: {device.catalog_name}",
                 f"  sysfs name: {device.sysfs_name}",
                 f"  identity not confirmed ({device.identity_status})",
-                f"  protocol unvalidated ({device.protocol_status})",
+                protocol_line,
                 f"  bcdDevice: {device.bcd_device or 'unknown'}",
                 f"  interface selection: {device.interface_selection}",
             )
