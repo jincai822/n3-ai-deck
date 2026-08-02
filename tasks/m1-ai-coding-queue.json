@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "milestone": "M1",
+  "title": "Safe N3 V3.0 read-only discovery",
+  "source_prd": "tasks/prd-n3-v3-read-only-discovery.md",
+  "execution_status": "authorized",
+  "execution_policy": {
+    "mode": "automated_with_human_hardware_gates",
+    "allowed": [
+      "read repository files",
+      "edit the isolated feature branch",
+      "run hardware-free tests, lint, type checks, and builds",
+      "read the approved Linux sysfs USB metadata",
+      "run n3-ai-deck-detect against the approved default sysfs root"
+    ],
+    "forbidden": [
+      "import or call the vendored StreamDock SDK from M1 modules",
+      "open or read any /dev node",
+      "modify ProductIDs.g_products",
+      "install or modify udev or systemd files",
+      "initialize the device or write brightness, images, or LCD data",
+      "read or publish a USB serial number",
+      "create a tag or GitHub release"
+    ]
+  },
+  "quality_gates": [
+    "uv run pytest",
+    "uv run ruff check .",
+    "uv run mypy --strict src/streamdock_n3/device_catalog.py src/streamdock_n3/discovery.py",
+    "uv build"
+  ],
+  "tasks": [
+    {
+      "id": "M1-01",
+      "title": "Passive USB device catalog",
+      "depends_on": [],
+      "state": "pending",
+      "deliverable": "Typed stdlib-only catalog for 6602:1000 and the 6603:1003 upstream reference with separate identity and protocol states.",
+      "focused_test": "uv run pytest tests/test_device_catalog.py -v"
+    },
+    {
+      "id": "M1-02",
+      "title": "Safe sysfs scanner",
+      "depends_on": ["M1-01"],
+      "state": "pending",
+      "deliverable": "Deterministic observations from trusted real sysfs or strict fixture roots without SDK or /dev access.",
+      "focused_test": "uv run pytest tests/test_discovery.py tests/test_discovery_safety.py -v"
+    },
+    {
+      "id": "M1-03",
+      "title": "Human and JSON detection CLI",
+      "depends_on": ["M1-02"],
+      "state": "pending",
+      "deliverable": "n3-ai-deck-detect entry point with closed JSON schema and exit codes 0, 1, 2, and 3.",
+      "focused_test": "uv run pytest tests/test_discovery_cli.py tests/test_discovery_safety.py -v"
+    },
+    {
+      "id": "M1-04",
+      "title": "Public safety documentation and package gate",
+      "depends_on": ["M1-03"],
+      "state": "pending",
+      "deliverable": "Bilingual safe-use documentation, architecture boundary, package entry-point smoke test, and publication assertions.",
+      "focused_test": "uv run pytest tests/test_public_project.py tests/test_discovery_safety.py -v"
+    },
+    {
+      "id": "M1-05",
+      "title": "Real-device read-only acceptance",
+      "depends_on": ["M1-04"],
+      "state": "pending",
+      "deliverable": "Non-sensitive validation record showing the candidate USB ID, bcdDevice, two HID interfaces, and ambiguous interface selection.",
+      "focused_test": "uv run n3-ai-deck-detect --json"
+    }
+  ]
+}
