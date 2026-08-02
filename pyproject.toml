@@ -31,7 +31,7 @@ classifiers = [
 ]
 dependencies = [
     "evdev>=1.9.3",
-    "pillow>=10",
+    "pillow>=12.3.0",
     "pyudev>=0.24",
 ]
 
