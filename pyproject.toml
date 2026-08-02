@@ -5,16 +5,19 @@ build-backend = "hatchling.build"
 [project]
 name = "streamdock-n3-linux"
 version = "0.2.5"
-description = "Linux controller and GTK4 GUI for the FHOOU/Mirabox Stream Dock N3."
+description = "Local-first AI productivity console for the Mirabox Stream Dock N3 on Linux."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
     { name = "Asad Al Badi", email = "asad.badi@vodafone.om" },
 ]
-keywords = ["streamdock", "n3", "mirabox", "fhoou", "linux", "hid", "gtk4"]
+maintainers = [
+    { name = "jincai822" },
+]
+keywords = ["ai", "automation", "streamdock", "n3", "mirabox", "linux", "hid", "gtk4", "productivity"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Environment :: X11 Applications :: GTK",
     "Intended Audience :: End Users/Desktop",
@@ -40,10 +43,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/asad-albadi/streamdock-n3"
-Repository = "https://github.com/asad-albadi/streamdock-n3"
-Issues = "https://github.com/asad-albadi/streamdock-n3/issues"
-Changelog = "https://github.com/asad-albadi/streamdock-n3/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/jincai822/n3-ai-deck"
+Repository = "https://github.com/jincai822/n3-ai-deck"
+Issues = "https://github.com/jincai822/n3-ai-deck/issues"
+Changelog = "https://github.com/jincai822/n3-ai-deck/blob/main/CHANGELOG.md"
+Upstream = "https://github.com/asad-albadi/streamdock-n3"
 
 [project.scripts]
 streamdock-n3 = "streamdock_n3.daemon:main"
@@ -68,6 +72,12 @@ include = [
     "src/streamdock_n3",
     "tests",
     "README.md",
+    "README.zh-CN.md",
+    "ROADMAP.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "ACKNOWLEDGEMENTS.md",
+    "docs/ARCHITECTURE.md",
     "CHANGELOG.md",
     "LICENSE",
     "Makefile",
