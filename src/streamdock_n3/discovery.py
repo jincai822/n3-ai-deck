@@ -167,7 +167,7 @@ def _read_attribute(
             )
             return None
         return logical_attribute.read_text(encoding="ascii")
-    except (OSError, UnicodeError):
+    except (OSError, RuntimeError, UnicodeError):
         warnings.append(
             _warning(WarningCode.UNREADABLE_ATTRIBUTE, logical_entry.name, attribute)
         )
@@ -181,6 +181,7 @@ def _resolve_entry(
     trusted_parent: Path,
     warnings: list[DiscoveryWarning],
 ) -> Path | None:
+    is_link = False
     try:
         is_link = entry.is_symlink()
         if is_link and not trusted_sysfs:
@@ -193,8 +194,8 @@ def _resolve_entry(
             warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, entry.name))
             return None
         return resolved
-    except OSError:
-        if entry.is_symlink():
+    except (OSError, RuntimeError):
+        if is_link:
             warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, entry.name))
         return None
 
@@ -230,7 +231,6 @@ def _scan_hid_interfaces(
     device_entry: Path,
     resolved_device: Path,
     entries: tuple[Path, ...],
-    resolved_entries: dict[Path, Path],
     trusted_sysfs: bool,
     warnings: list[DiscoveryWarning],
 ) -> tuple[HidInterfaceObservation, ...]:
@@ -246,15 +246,13 @@ def _scan_hid_interfaces(
     for interface_entry in entries:
         if not interface_entry.name.startswith(prefix):
             continue
-        resolved_interface = resolved_entries.get(interface_entry)
+        resolved_interface = _resolve_entry(
+            interface_entry,
+            trusted_sysfs=trusted_sysfs,
+            trusted_parent=resolved_device,
+            warnings=warnings,
+        )
         if resolved_interface is None:
-            continue
-        if (
-            trusted_sysfs
-            and interface_entry.is_symlink()
-            and not resolved_interface.is_relative_to(resolved_device)
-        ):
-            warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, interface_entry.name))
             continue
 
         raw_values: list[str | None] = []
@@ -346,17 +344,19 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
         if not resolved_root.is_dir():
             return _unavailable_report()
         entries = tuple(sorted(resolved_root.iterdir(), key=lambda item: item.name))
-    except OSError:
+    except (OSError, RuntimeError):
         return _unavailable_report()
 
     trusted_sysfs = resolved_root == DEFAULT_SYSFS_ROOT
-    resolved_entries: dict[Path, Path] = {}
+    resolved_devices: dict[Path, Path] = {}
     valid_entries: list[Path] = []
     for entry in entries:
         if _SAFE_SYSFS_NAME.fullmatch(entry.name) is None:
             warnings.append(_warning(WarningCode.INVALID_SYSFS_NAME))
             continue
         valid_entries.append(entry)
+        if ":" in entry.name:
+            continue
         resolved_entry = _resolve_entry(
             entry,
             trusted_sysfs=trusted_sysfs,
@@ -364,12 +364,12 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
             warnings=warnings,
         )
         if resolved_entry is not None:
-            resolved_entries[entry] = resolved_entry
+            resolved_devices[entry] = resolved_entry
 
     observations: list[UsbObservation] = []
     valid_entry_tuple = tuple(valid_entries)
     for entry in valid_entry_tuple:
-        resolved_entry = resolved_entries.get(entry)
+        resolved_entry = resolved_devices.get(entry)
         if resolved_entry is None:
             continue
         raw_vid, vid_failed = _read_with_status(
@@ -402,10 +402,9 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
                 )
             continue
 
-        try:
-            vid = format_usb_id(raw_vid)
-            pid = format_usb_id(raw_pid)
-        except (TypeError, ValueError):
+        vid = _normalize_hex(raw_vid, _HEX_4, 4)
+        pid = _normalize_hex(raw_pid, _HEX_4, 4)
+        if vid is None or pid is None:
             warnings.append(_warning(WarningCode.INVALID_USB_IDENTITY, entry.name))
             continue
         catalog_entry = find_known_usb_device(vid, pid)
@@ -437,7 +436,6 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
             entry,
             resolved_entry,
             valid_entry_tuple,
-            resolved_entries,
             trusted_sysfs,
             warnings,
         )

@@ -160,6 +160,32 @@ def test_raw_attributes_are_normalized(tmp_path: Path) -> None:
     }
 
 
+def test_uppercase_usb_identity_with_surrounding_whitespace_is_valid_hex(
+    tmp_path: Path,
+) -> None:
+    add_usb_device(tmp_path, "6-2", " ABCD ", " EF01 ", "0300")
+
+    report = discover_usb_devices(tmp_path)
+
+    assert report.devices == ()
+    assert report.warnings == ()
+
+
+@pytest.mark.parametrize(
+    ("vid", "pid"),
+    (("0x6602", "1000"), ("6602", "0X1000")),
+)
+def test_prefixed_usb_identity_is_invalid_sysfs_hex(
+    tmp_path: Path, vid: str, pid: str
+) -> None:
+    add_usb_device(tmp_path, "6-3", vid, pid, "0300")
+
+    report = discover_usb_devices(tmp_path)
+
+    assert report.devices == ()
+    assert warning_codes(report) == [WarningCode.INVALID_USB_IDENTITY]
+
+
 def test_report_schema_is_closed_and_report_values_are_immutable(tmp_path: Path) -> None:
     add_usb_device(tmp_path, "7-1", "6602", "1000", "0300")
     add_interface(tmp_path, "7-1", "1.0", "00", "03", "00", "00")
@@ -301,6 +327,32 @@ def test_unavailable_root_has_one_stable_warning(
             return original_iterdir(self)
 
         monkeypatch.setattr(Path, "iterdir", fail_exact_iterdir)
+
+    report = discover_usb_devices(root)
+
+    assert report.root_available is False
+    assert report.devices == ()
+    assert [warning.to_dict() for warning in report.warnings] == [
+        {"code": "root_unavailable", "sysfs_name": None, "attribute": None}
+    ]
+    assert exit_code_for(report) == 2
+
+
+def test_symlink_loop_root_runtime_error_has_one_stable_unavailable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "loop-root"
+    root.symlink_to(root, target_is_directory=True)
+    original_resolve = Path.resolve
+
+    def raise_runtime_error_for_loop(
+        self: Path, *args: object, **kwargs: object
+    ) -> Path:
+        if self == root:
+            raise RuntimeError("private symlink loop detail")
+        return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", raise_runtime_error_for_loop)
 
     report = discover_usb_devices(root)
 
@@ -454,9 +506,91 @@ def test_trusted_mode_rejects_interface_link_outside_resolved_device(
     assert warning_codes(report) == [WarningCode.UNSAFE_SYMLINK]
 
 
+def test_trusted_out_of_scope_interface_is_never_read_as_a_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root = configure_trusted_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "20-1", "6602", "1000", "0300")
+    other_device = add_usb_device(devices_root, "20-2", "6603", "1003", "0100")
+    (bus_root / "20-1").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "20-1:1.0").symlink_to(other_device, target_is_directory=True)
+    original_reader = discovery._read_attribute
+    read_entries: list[str] = []
+
+    def recording_reader(
+        logical_entry: Path,
+        resolved_entry: Path,
+        attribute: str,
+        allowed_attributes: frozenset[str],
+        trusted_sysfs: bool,
+        warnings: list[discovery.DiscoveryWarning],
+    ) -> str | None:
+        read_entries.append(logical_entry.name)
+        return original_reader(
+            logical_entry,
+            resolved_entry,
+            attribute,
+            allowed_attributes,
+            trusted_sysfs,
+            warnings,
+        )
+
+    monkeypatch.setattr(discovery, "_read_attribute", recording_reader)
+
+    report = discover_usb_devices(bus_root)
+
+    assert [item.sysfs_name for item in report.devices] == ["20-1"]
+    assert "20-1:1.0" not in read_entries
+    assert [warning.to_dict() for warning in report.warnings] == [
+        {"code": "unsafe_symlink", "sysfs_name": "20-1:1.0", "attribute": None}
+    ]
+
+
 @pytest.mark.parametrize("entry_kind", ("device", "interface"))
-def test_trusted_mode_rejects_leaf_symlink_within_its_resolved_entry(
+def test_trusted_mode_rejects_symlink_loop_entries_without_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry_kind: str
+) -> None:
+    bus_root, devices_root = configure_trusted_roots(tmp_path, monkeypatch)
+    if entry_kind == "device":
+        loop_entry = bus_root / "loop-device"
+        expected_devices: list[str] = []
+    else:
+        resolved_device = add_usb_device(devices_root, "21-1", "6602", "1000", "0300")
+        (bus_root / "21-1").symlink_to(resolved_device, target_is_directory=True)
+        loop_entry = bus_root / "21-1:1.0"
+        expected_devices = ["21-1"]
+    loop_entry.symlink_to(loop_entry, target_is_directory=True)
+    original_resolve = Path.resolve
+
+    def raise_runtime_error_for_loop(
+        self: Path, *args: object, **kwargs: object
+    ) -> Path:
+        if self == loop_entry:
+            raise RuntimeError("private symlink loop detail")
+        return original_resolve(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "resolve", raise_runtime_error_for_loop)
+
+    report = discover_usb_devices(bus_root)
+
+    assert [item.sysfs_name for item in report.devices] == expected_devices
+    assert any(
+        warning.code is WarningCode.UNSAFE_SYMLINK
+        and warning.sysfs_name == loop_entry.name
+        and warning.attribute is None
+        for warning in report.warnings
+    )
+
+
+@pytest.mark.parametrize("entry_kind", ("device", "interface"))
+@pytest.mark.parametrize(
+    "target_location", ("inside_entry", "outside_entry", "outside_devices")
+)
+def test_trusted_mode_rejects_all_leaf_symlink_targets_without_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_kind: str,
+    target_location: str,
 ) -> None:
     bus_root, devices_root = configure_trusted_roots(tmp_path, monkeypatch)
     resolved_device = add_usb_device(devices_root, "17-1", "6602", "1000", "0300")
@@ -469,8 +603,25 @@ def test_trusted_mode_rejects_leaf_symlink_within_its_resolved_entry(
     attribute = "idVendor" if entry_kind == "device" else "bInterfaceClass"
     value = "6602" if entry_kind == "device" else "03"
     (entry / attribute).unlink()
-    write_attr(entry, f"{attribute}.copy", value)
-    (entry / attribute).symlink_to(entry / f"{attribute}.copy")
+    if target_location == "inside_entry":
+        target = entry / f"{attribute}.copy"
+    elif target_location == "outside_entry":
+        target = devices_root / "shared-attributes" / f"{entry_kind}-{attribute}"
+    else:
+        target = tmp_path / "outside-devices" / f"{entry_kind}-{attribute}"
+    write_attr(target.parent, target.name, value)
+    (entry / attribute).symlink_to(target)
+    logical_entry = bus_root / ("17-1" if entry_kind == "device" else "17-1:1.0")
+    logical_attribute = logical_entry / attribute
+    original_read_text = Path.read_text
+    read_attempts: list[Path] = []
+
+    def recording_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == logical_attribute:
+            read_attempts.append(self)
+        return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "read_text", recording_read_text)
 
     report = discover_usb_devices(bus_root)
 
@@ -478,6 +629,7 @@ def test_trusted_mode_rejects_leaf_symlink_within_its_resolved_entry(
         warning.code is WarningCode.UNSAFE_SYMLINK and warning.attribute == attribute
         for warning in report.warnings
     )
+    assert read_attempts == []
     if entry_kind == "interface":
         assert report.devices[0].hid_interfaces == ()
     else:
