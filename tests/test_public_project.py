@@ -39,3 +39,23 @@ def test_ci_targets_main_and_automatic_release_is_disabled() -> None:
     assert "branches: [main]" in ci
     assert "branches: [master]" not in ci
     assert not (ROOT / ".github/workflows/release.yml").exists()
+
+
+def test_bilingual_readmes_are_honest_early_preview_pages() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    for text in (english, chinese):
+        assert "Early Preview" in text
+        assert "6602:1000" in text
+        assert "https://github.com/asad-albadi/streamdock-n3" in text
+        assert "curl -fsSL" not in text
+    assert "README.zh-CN.md" in english
+    assert "README.md" in chinese
+    assert "not yet validated" in english
+    assert "尚未完成真机验证" in chinese
+
+
+def test_readme_has_no_inherited_release_claims() -> None:
+    english = read_text("README.md")
+    assert "asad-albadi/streamdock-n3/releases/latest" not in english
+    assert "streamdock-n3-install" not in english
