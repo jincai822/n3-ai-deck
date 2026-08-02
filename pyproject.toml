@@ -81,7 +81,6 @@ include = [
     "CHANGELOG.md",
     "LICENSE",
     "Makefile",
-    "install.sh",
     "pyproject.toml",
 ]
 

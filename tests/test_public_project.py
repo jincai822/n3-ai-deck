@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -61,6 +63,62 @@ def test_readme_has_no_inherited_release_claims() -> None:
     assert "streamdock-n3-install" not in english
 
 
+def test_publication_tree_omits_inherited_installer_and_screenshots() -> None:
+    assert not (ROOT / "install.sh").exists()
+    assert not list((ROOT / "docs").glob("screenshot-*.png"))
+
+    sdist_includes = tomllib.loads(read_text("pyproject.toml"))["tool"]["hatch"]["build"][
+        "targets"
+    ]["sdist"]["include"]
+    assert "install.sh" not in sdist_includes
+
+
+def test_public_docs_label_unavailable_architecture_as_planned() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+
+    assert "target architecture" in english
+    assert "planned plugin contract" in english
+    assert "planned public core" in english
+    assert "目标架构" in chinese
+    assert "规划中的插件协议" in chinese
+    assert "规划中的公开核心" in chinese
+    assert "target architecture" in architecture
+    assert "planned responsibility" in architecture
+
+    for reviewed_claim in (
+        "N3 AI Deck adds a safer device boundary",
+        "Add integrations through a documented plugin contract.",
+        "The public core contains device communication",
+        "Owns supported USB identifiers",
+        "Normalizes physical events",
+        "Defines metadata, configuration validation",
+        "The public repository owns device integration",
+        "Plugin failure or timeout does not crash the device daemon.",
+        "Missing AI credentials disable only the affected plugin.",
+    ):
+        assert reviewed_claim not in "\n".join((english, architecture))
+
+    for reviewed_claim in (
+        "通过公开插件协议增加新的集成。",
+        "公开核心包含设备通信",
+    ):
+        assert reviewed_claim not in chinese
+
+
+def test_readmes_explain_inherited_distribution_identifiers() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    for identifier in ("streamdock-n3-linux", "streamdock-n3"):
+        assert identifier in english
+        assert identifier in chinese
+    assert "before `v0.1.0`" in english
+    assert "not an N3 AI Deck release" in english
+    assert "`v0.1.0` 之前" in chinese
+    assert "并非 N3 AI Deck 的发布版本" in chinese
+
+
 def test_required_public_documents_cover_launch_contract() -> None:
     requirements = {
         "ROADMAP.md": ("M0", "M5", "v0.1.0"),
@@ -103,3 +161,55 @@ def test_github_templates_collect_status_and_safety_evidence() -> None:
     assert "customer outcome" in feature.lower()
     assert "Hardware access" in pull_request
     assert "Upstream / license impact" in pull_request
+
+
+def test_issue_template_requires_private_security_reporting() -> None:
+    config = read_text(".github/ISSUE_TEMPLATE/config.yml")
+    assert "blank_issues_enabled: false" in config
+    assert "https://github.com/jincai822/n3-ai-deck/security/advisories/new" in config
+    assert "Report vulnerabilities privately" in config
+
+
+def test_tracked_publication_text_has_no_local_paths_or_obvious_tokens() -> None:
+    tracked = subprocess.check_output(
+        ["git", "ls-files", "-z"], cwd=ROOT
+    ).decode().split("\0")
+    skipped_parts = {
+        "_vendor",
+        ".venv",
+        "dist",
+        "build",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+    }
+    forbidden_prefixes = (
+        "/home/" + "asad/",
+        "/home/" + "cj1024/",
+        "/srv/" + "workspaces/",
+    )
+    token_patterns = (
+        re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+        re.compile(r"gh(?:p|o|u|s|r)_[A-Za-z0-9]{20,}"),
+    )
+    findings: list[str] = []
+
+    for relative_path in tracked:
+        if not relative_path:
+            continue
+        path = Path(relative_path)
+        if skipped_parts.intersection(path.parts):
+            continue
+        data = (ROOT / path).read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if any(prefix in text for prefix in forbidden_prefixes):
+            findings.append(relative_path)
+        if any(pattern.search(text) for pattern in token_patterns):
+            findings.append(relative_path)
+
+    assert not findings, f"publication-sensitive text found in: {sorted(set(findings))}"
