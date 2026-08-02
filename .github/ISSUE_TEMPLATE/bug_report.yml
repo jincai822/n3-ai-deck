@@ -1,0 +1,34 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include API keys or a device serial number."
+  - type: input
+    id: usb-id
+    attributes:
+      label: USB ID
+      description: "VID:PID only, for example 6602:1000. Never include the serial."
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Reproduction and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: hardware-access
+    attributes:
+      label: Hardware access performed
+      options: [None, Read-only diagnostics, Hardware write]
+    validations:
+      required: true

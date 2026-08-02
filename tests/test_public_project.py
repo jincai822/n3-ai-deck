@@ -90,3 +90,14 @@ def test_public_documents_do_not_expose_connected_device_serial() -> None:
     )
     for raw_serial_marker in ("ID_SERIAL_SHORT=", "iSerial=", "serial_number="):
         assert raw_serial_marker not in documents
+
+
+def test_github_templates_collect_status_and_safety_evidence() -> None:
+    bug = read_text(".github/ISSUE_TEMPLATE/bug_report.yml")
+    feature = read_text(".github/ISSUE_TEMPLATE/feature_request.yml")
+    pull_request = read_text(".github/pull_request_template.md")
+    assert "USB ID" in bug
+    assert "serial" in bug.lower()
+    assert "customer outcome" in feature.lower()
+    assert "Hardware access" in pull_request
+    assert "Upstream / license impact" in pull_request

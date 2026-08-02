@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a customer outcome for the public core
+title: "[Feature]: "
+labels: [enhancement, needs-triage]
+body:
+  - type: textarea
+    id: customer-outcome
+    attributes:
+      label: Customer outcome
+      description: What should become faster, easier, or possible?
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Physical workflow
+      description: Describe the key, knob, screen, AI, or automation interaction.
+    validations:
+      required: true
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Suggested product boundary
+      options: [Public core, Commercial extension, Unsure]
+    validations:
+      required: true
