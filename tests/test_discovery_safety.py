@@ -222,6 +222,16 @@ def test_detection_console_script_targets_discovery_main() -> None:
     assert project["scripts"]["n3-ai-deck-detect"] == "streamdock_n3.discovery:main"
 
 
+def _assert_process_succeeded(
+    result: subprocess.CompletedProcess[str], action: str
+) -> None:
+    assert result.returncode == 0, (
+        f"{action} failed: returncode={result.returncode}\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
 def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "wheel"
     build = subprocess.run(
@@ -230,11 +240,7 @@ def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Pat
         capture_output=True,
         text=True,
     )
-    assert build.returncode == 0, (
-        f"fresh wheel build failed: returncode={build.returncode}\n"
-        f"stdout:\n{build.stdout}\n"
-        f"stderr:\n{build.stderr}"
-    )
+    _assert_process_succeeded(build, "fresh wheel build")
 
     wheels = sorted(wheel_dir.glob("*.whl"))
     assert len(wheels) == 1, f"expected exactly one fresh wheel in {wheel_dir}, found: {wheels}"
@@ -251,6 +257,52 @@ def test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path: Pat
             "streamdock_n3/discovery.py",
         ):
             assert module in contents, f"fresh wheel is missing {module}"
+
+    venv_dir = tmp_path / "venv"
+    venv = subprocess.run(
+        ["uv", "venv", str(venv_dir)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    _assert_process_succeeded(venv, "venv creation")
+
+    if sys.platform == "win32":
+        python = venv_dir / "Scripts" / "python.exe"
+        detector = venv_dir / "Scripts" / "n3-ai-deck-detect.exe"
+    else:
+        python = venv_dir / "bin" / "python"
+        detector = venv_dir / "bin" / "n3-ai-deck-detect"
+    install = subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--no-deps",
+            "--python",
+            str(python),
+            str(wheels[0]),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    _assert_process_succeeded(install, "wheel install")
+
+    help_result = subprocess.run(
+        [str(detector), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    _assert_process_succeeded(help_result, "installed wheel help")
+    help_output = f"{help_result.stdout}\n{help_result.stderr}".lower()
+    for phrase in ("read-only", "sysfs-only", "does not confirm", "protocol compatibility"):
+        assert phrase in help_output, (
+            f"installed wheel help is missing {phrase!r}\n"
+            f"stdout:\n{help_result.stdout}\n"
+            f"stderr:\n{help_result.stderr}"
+        )
 
 
 def test_fresh_wheel_build_failure_includes_captured_output(
@@ -273,6 +325,46 @@ def test_fresh_wheel_build_failure_includes_captured_output(
     assert "returncode=1" in message
     assert "simulated wheel stdout" in message
     assert "simulated wheel stderr" in message
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ("venv creation", "wheel install", "installed wheel help"),
+)
+def test_fresh_wheel_step_failure_includes_captured_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    original_run = subprocess.run
+
+    def fail_selected_stage(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        command = [str(part) for part in args[0]]
+        stage: str | None = None
+        if command[:2] == ["uv", "venv"]:
+            stage = "venv creation"
+        elif command[:3] == ["uv", "pip", "install"]:
+            stage = "wheel install"
+        elif command[-1:] == ["--help"]:
+            stage = "installed wheel help"
+        if stage == failure_stage:
+            return subprocess.CompletedProcess(
+                args=args[0],
+                returncode=1,
+                stdout=f"simulated {stage} stdout",
+                stderr=f"simulated {stage} stderr",
+            )
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_selected_stage)
+
+    with pytest.raises(AssertionError) as raised:
+        test_fresh_wheel_contains_detection_entry_point_and_m1_modules(tmp_path)
+    message = str(raised.value)
+    assert f"{failure_stage} failed:" in message
+    assert "returncode=1" in message
+    assert f"simulated {failure_stage} stdout" in message
+    assert f"simulated {failure_stage} stderr" in message
 
 
 def test_installed_entry_point_help_keeps_forbidden_modules_unloaded() -> None:
