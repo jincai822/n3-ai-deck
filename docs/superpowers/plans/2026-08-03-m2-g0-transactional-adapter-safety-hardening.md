@@ -49,6 +49,22 @@
 - Modify `ROADMAP.md`: link the approved safety revision without marking G1–G7 complete.
 - Modify `docs/superpowers/plans/2026-08-03-m2-g0-safe-adapter-foundation.md`: retain the supersession warning added when this plan was authored.
 
+## Approved Atomic Execution Amendment
+
+On 2026-08-03 the product owner approved an execution amendment after the clean-test preflight
+proved that Tasks 2–5 cannot be committed independently without either retaining the unsafe public
+`CapabilityGate` as a compatibility shim or temporarily breaking Adapter/helper consumers.
+
+- Execute Tasks 2–5 as one atomic integration wave with one implementation report and one combined
+  spec/quality review.
+- The Task 2–5 headings below remain the required internal TDD order and scope ledger, not separate
+  mergeable checkpoints.
+- Do not retain or introduce a public gate shim at any intermediate commit.
+- The atomic wave is complete only when its focused tests, the full repository pytest suite, Ruff,
+  strict hardware mypy, build, and diff check are clean.
+- If an intermediate checkpoint cannot remain green, continue within the same uncommitted wave; do
+  not publish or hand off the broken checkpoint.
+
 ## Interface Ledger
 
 The names in this ledger are authoritative across every task:
