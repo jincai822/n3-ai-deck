@@ -121,8 +121,17 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "does not import the vendored SDK",
         "G1",
         "G7",
+        "hardware-free G0 simulation foundation is implemented",
+        "active hardware stages G1–G7 remain planned M2 work",
     ):
         assert required in architecture
+
+    assert "N3Adapter\n  -> FakeBackend\n  -> redacted in-memory evidence" in architecture
+    assert (
+        "fake-only helper process\n  -> CapabilityGate\n  -> FakeBackend\n  -> OperationResult"
+        in architecture
+    )
+    assert "FakeBackend or fake-only helper process" not in architecture
 
     for required in (
         "tasks/prd-m2-n3-v3-hardware-controls.md",

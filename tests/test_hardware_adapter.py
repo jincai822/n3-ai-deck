@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from streamdock_n3.hardware.adapter import N3Adapter
@@ -193,6 +195,93 @@ def test_backend_exception_is_sanitized_and_blocks_the_gate() -> None:
     assert adapter.state is AdapterState.BLOCKED
     assert "secret backend exception detail" not in repr(adapter)
     assert "secret backend exception detail" not in repr(result)
+
+
+class MaliciousResult:
+    succeeded = True
+    events = ("unvalidated event",)
+
+
+class MaliciousBackend:
+    def __init__(self) -> None:
+        self.execute_calls = 0
+
+    def execute(self, command: AdapterCommand, manifest: StageManifest) -> OperationResult:
+        del command, manifest
+        self.execute_calls += 1
+        return cast(OperationResult, MaliciousResult())
+
+
+class ResultCapturingEvidence:
+    def __init__(self) -> None:
+        self.operation_results: list[OperationResult] = []
+
+    def record_operation(
+        self,
+        profile: object,
+        manifest: object,
+        command: object,
+        result: OperationResult,
+    ) -> None:
+        del profile, manifest, command
+        self.operation_results.append(result)
+
+    def record_stage(
+        self,
+        profile: object,
+        manifest: object,
+        state: object,
+        recovery_status: object,
+    ) -> None:
+        del profile, manifest, state, recovery_status
+
+
+def test_non_contract_backend_result_is_normalized_and_blocks_completion() -> None:
+    backend = MaliciousBackend()
+    evidence = ResultCapturingEvidence()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend, evidence=evidence)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+
+    result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+
+    assert result == OperationResult(
+        ResultStatus.BACKEND_ERROR,
+        ErrorCode.BACKEND_FAILURE,
+        0,
+    )
+    assert isinstance(result, OperationResult)
+    assert result.events == ()
+    assert backend.execute_calls == 1
+    assert adapter.state is AdapterState.BLOCKED
+    assert evidence.operation_results == [result]
+    assert all(isinstance(item, OperationResult) for item in evidence.operation_results)
+    with pytest.raises(GateViolation) as raised:
+        adapter.complete_stage(True)
+    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+    assert adapter.state is AdapterState.BLOCKED
+    assert backend.execute_calls == 1
+
+
+@pytest.mark.parametrize("manual_confirmation", ("false", 1, object()))
+def test_adapter_rejects_non_bool_confirmation_without_mutating_session(
+    manual_confirmation: object,
+) -> None:
+    adapter, backend = make_adapter()
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+    session = adapter.gate.session
+    assert session is not None
+    call_counts = list(session.call_counts)
+    backend_calls = list(backend.calls)
+
+    with pytest.raises(GateViolation) as raised:
+        adapter.complete_stage(cast(bool, manual_confirmation))
+
+    assert raised.value.code is ErrorCode.PARAMETER_NOT_ALLOWED
+    assert adapter.state is AdapterState.CANDIDATE
+    assert adapter.gate.session is session
+    assert session.call_counts == call_counts
+    assert backend.calls == backend_calls
 
 
 class CountingBackend:

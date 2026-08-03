@@ -1,19 +1,26 @@
 # Architecture
 
-N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active SDK/device adapter work is planned M2 work. Everything below describes the planned target architecture beyond that implemented M1 discovery boundary.
+N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1, and the hardware-free G0 simulation foundation is implemented in M2. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active hardware stages G1–G7 remain planned M2 work. Everything below distinguishes those implemented M1/G0 boundaries from the planned target architecture.
 
 ## G0 implemented safety boundary
 
-Only the hardware-free G0 simulation foundation is implemented. Its data flow is:
+Only the hardware-free G0 simulation foundation is implemented. It has two independent simulation paths:
 
 ```text
 M1 passive observation
   -> immutable test/profile contract
   -> CapabilityGate
   -> N3Adapter
-  -> FakeBackend or fake-only helper process
+  -> FakeBackend
   -> redacted in-memory evidence
+
+fake-only helper process
+  -> CapabilityGate
+  -> FakeBackend
+  -> OperationResult
 ```
+
+The helper path is independent: `N3Adapter` does not invoke the helper process, and the helper returns an `OperationResult` without automatically connecting to the Adapter's evidence recorder.
 
 `FakeBackend` is the only implemented backend. G0 does not activate `6602:1000`: that identifier remains a candidate, unvalidated, and has no selected production interface or active profile. G0 does not import the vendored SDK, open `/dev`, install permissions, or write hardware.
 

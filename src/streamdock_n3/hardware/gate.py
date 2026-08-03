@@ -142,6 +142,8 @@ class CapabilityGate:
 
     def complete(self, manual_confirmation: bool) -> AdapterState:
         """Complete the active stage only after manual confirmation and required calls."""
+        if not isinstance(manual_confirmation, bool):
+            raise GateViolation(ErrorCode.PARAMETER_NOT_ALLOWED)
         session = self._require_session()
         if not manual_confirmation:
             self.state = AdapterState.BLOCKED

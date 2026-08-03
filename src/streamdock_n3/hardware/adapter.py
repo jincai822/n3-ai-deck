@@ -74,6 +74,8 @@ class N3Adapter:
             result = self.backend.execute(command, manifest)
         except Exception:
             result = OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
+        if not isinstance(result, OperationResult):
+            result = OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
         self.gate.record_result(result)
         if self.evidence is not None:
             self.evidence.record_operation(self.profile, manifest, command, result)

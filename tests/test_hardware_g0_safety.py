@@ -49,13 +49,13 @@ REVIEWED_SOURCE_SHA256 = {
         "83ab0484cbb4c2d295f4b38d0474819206ca3cb98e8d84c770e600e61db81e57"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "e248c832867159c9ed24f76068bb729dac22e912a17131af8da8e2f2f6ba7826"
+        "2d21590eb9a1088935942bef2fb3f01ba2cd37b0512bff83c69a9f6ff2c9399f"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "6cd66a67cf7206eda20efebd0931121c2973f09c8426d2d54f9eb51ebca2fbc3"
+        "e0f74049bbd59a9353e214aa1b7bb2539f86e6a0526fc470e9e0b7a2d03105e8"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
         "b5a06f8e8c77c2c947dd62040f80e71f7d7acc7dcf628995d29a936edb0c4046"
@@ -1176,6 +1176,12 @@ def _reviewed_source_snapshot_violations(sources: dict[Path, bytes]) -> list[Pat
     return [*violations, *sorted(set(sources) - set(REVIEWED_SOURCE_PATHS))]
 
 
+def _g0_module_set_violations(root: Path) -> list[Path]:
+    hardware_root = root / "src/streamdock_n3/hardware"
+    actual = {path.relative_to(root) for path in hardware_root.rglob("*.py")}
+    return sorted(actual.symmetric_difference(G0_MODULES))
+
+
 def _wheel_member(path: Path) -> str:
     return path.relative_to("src").as_posix()
 
@@ -1184,11 +1190,19 @@ def _wheel_reviewed_source_violations(
     members: dict[str, bytes],
     sources: dict[Path, bytes],
 ) -> list[Path]:
-    return [
+    reviewed_violations = [
         path
         for path in WHEEL_REVIEWED_PATHS
         if path not in sources or members.get(_wheel_member(path)) != sources[path]
     ]
+    expected_hardware = {_wheel_member(path) for path in G0_MODULES}
+    actual_hardware = {
+        member for member in members if member.startswith("streamdock_n3/hardware/")
+    }
+    extra_hardware = [
+        Path("src") / member for member in sorted(actual_hardware - expected_hardware)
+    ]
+    return [*reviewed_violations, *extra_hardware]
 
 
 def _forbidden_runtime_modules(names: Sequence[str]) -> list[str]:
@@ -1235,6 +1249,10 @@ def test_g0_sources_contain_no_forbidden_hardware_or_system_strings() -> None:
     ]
 
     assert violations == []
+
+
+def test_source_tree_contains_exactly_the_eight_reviewed_g0_modules() -> None:
+    assert _g0_module_set_violations(ROOT) == []
 
 
 def test_g0_imports_stay_inside_the_safe_dependency_closure() -> None:
@@ -1434,11 +1452,12 @@ def test_candidate_usb_id_is_not_activated_or_granted_a_udev_rule() -> None:
 
 def test_fresh_wheel_contains_exact_reviewed_source_and_data_bytes(built_wheel: Path) -> None:
     sources = {path: (ROOT / path).read_bytes() for path in WHEEL_REVIEWED_PATHS}
+    reviewed_members = {_wheel_member(path) for path in WHEEL_REVIEWED_PATHS}
     with zipfile.ZipFile(built_wheel) as archive:
         packaged = {
             member: archive.read(member)
             for member in archive.namelist()
-            if member in {_wheel_member(path) for path in WHEEL_REVIEWED_PATHS}
+            if member in reviewed_members or member.startswith("streamdock_n3/hardware/")
         }
 
     assert _wheel_reviewed_source_violations(packaged, sources) == []
@@ -2093,3 +2112,25 @@ def test_wheel_byte_gate_rejects_a_mutated_archive_member() -> None:
     members[_wheel_member(mutated)] += b"\n# archive-only mutation\n"
 
     assert _wheel_reviewed_source_violations(members, sources) == [mutated]
+
+
+def test_source_module_set_gate_rejects_an_extra_nested_python_module(tmp_path: Path) -> None:
+    for path in G0_MODULES:
+        destination = tmp_path / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("# reviewed fixture\n", encoding="utf-8")
+    extra = Path("src/streamdock_n3/hardware/experimental/real_backend.py")
+    destination = tmp_path / extra
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("# unreviewed backend\n", encoding="utf-8")
+
+    assert _g0_module_set_violations(tmp_path) == [extra]
+
+
+def test_wheel_byte_gate_rejects_an_extra_hardware_archive_member() -> None:
+    sources = {path: (ROOT / path).read_bytes() for path in WHEEL_REVIEWED_PATHS}
+    members = {_wheel_member(path): content for path, content in sources.items()}
+    extra = Path("src/streamdock_n3/hardware/experimental/real_backend.py")
+    members[_wheel_member(extra)] = b"# unreviewed backend\n"
+
+    assert _wheel_reviewed_source_violations(members, sources) == [extra]

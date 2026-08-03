@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -180,6 +181,27 @@ def test_completion_without_manual_confirmation_blocks_and_clears_session() -> N
 
     assert gate.complete(manual_confirmation=False) is AdapterState.BLOCKED
     assert gate.session is None
+
+
+@pytest.mark.parametrize("manual_confirmation", ("false", 1, object()))
+def test_non_bool_confirmation_is_rejected_without_mutating_gate(
+    manual_confirmation: object,
+) -> None:
+    gate = make_gate(AdapterState.CANDIDATE)
+    command = AdapterCommand(Operation.APPROVE_PROFILE)
+    begin(gate, Stage.G1_PROFILE)
+    succeed(gate, command)
+    session = gate.session
+    assert session is not None
+    call_counts = list(session.call_counts)
+
+    with pytest.raises(GateViolation) as raised:
+        gate.complete(cast(bool, manual_confirmation))
+
+    assert raised.value.code is ErrorCode.PARAMETER_NOT_ALLOWED
+    assert gate.state is AdapterState.CANDIDATE
+    assert gate.session is session
+    assert session.call_counts == call_counts
 
 
 def test_non_success_result_blocks_and_clears_session() -> None:
