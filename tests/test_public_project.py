@@ -46,6 +46,19 @@ def test_ci_targets_main_and_automatic_release_is_disabled() -> None:
     assert not (ROOT / ".github/workflows/release.yml").exists()
 
 
+def test_project_metadata_requires_patched_pillow_release() -> None:
+    project = tomllib.loads(read_text("pyproject.toml"))["project"]
+
+    assert "pillow>=12.3.0" in (dependency.lower() for dependency in project["dependencies"])
+
+
+def test_lockfile_uses_patched_pillow_release() -> None:
+    packages = tomllib.loads(read_text("uv.lock"))["package"]
+    pillow = next(package for package in packages if package["name"].lower() == "pillow")
+
+    assert tuple(int(part) for part in pillow["version"].split(".")) >= (12, 3, 0)
+
+
 def test_bilingual_readmes_are_honest_early_preview_pages() -> None:
     english = read_text("README.md")
     chinese = read_text("README.zh-CN.md")
