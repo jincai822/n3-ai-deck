@@ -2,6 +2,23 @@
 
 N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active SDK/device adapter work is planned M2 work. Everything below describes the planned target architecture beyond that implemented M1 discovery boundary.
 
+## G0 implemented safety boundary
+
+Only the hardware-free G0 simulation foundation is implemented. Its data flow is:
+
+```text
+M1 passive observation
+  -> immutable test/profile contract
+  -> CapabilityGate
+  -> N3Adapter
+  -> FakeBackend or fake-only helper process
+  -> redacted in-memory evidence
+```
+
+`FakeBackend` is the only implemented backend. G0 does not activate `6602:1000`: that identifier remains a candidate, unvalidated, and has no selected production interface or active profile. G0 does not import the vendored SDK, open `/dev`, install permissions, or write hardware.
+
+G1 chooses and approves an exact active profile and interface responsibility; G2 covers separately approved permissions; G3–G7 cover input, initialization, brightness, one LCD, and six LCDs. The legacy daemon, action, plugin, and UI flow remains planned and disconnected from the G0 Adapter.
+
 ## Public components
 
 ### Device adapter

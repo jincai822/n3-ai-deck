@@ -5,6 +5,9 @@ N3 AI Deck is an Early Preview. Milestone completion requires evidence; dates ar
 The formal product baseline is in [the N3 AI Deck PRD](tasks/prd-n3-ai-deck.md).
 M1's approved testable scope and safety boundary are defined in
 [the read-only discovery PRD](tasks/prd-n3-v3-read-only-discovery.md).
+M2's approved scope and G0 design are defined in
+[the hardware-controls PRD](tasks/prd-m2-n3-v3-hardware-controls.md) and
+[the hardware-controls design](docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md).
 
 ## M0 — Public foundation
 
@@ -24,10 +27,14 @@ M1's approved testable scope and safety boundary are defined in
 
 ## M2 — Hardware controls
 
-**Status:** Pending
+**Status:** In progress — G0 foundation only
 
-- SDK activation and udev permission design both require manual approval before any M2 work.
-- Validate keys, round buttons, knobs, brightness, and all six LCD keys in staged manual tests.
+- [x] Define and test the hardware-free Adapter contracts, capability gate, FakeBackend,
+  fake-only helper isolation, and redacted evidence.
+- [ ] G1: approve an exact active profile and resolve interface responsibility.
+- [ ] G2: approve any permission change separately.
+- [ ] G3–G7: validate input, initialization, brightness, one LCD, and all six LCDs through
+  their independent manual gates.
 
 ## M3 — Extensible action engine
 

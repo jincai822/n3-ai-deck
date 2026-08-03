@@ -96,8 +96,9 @@ def test_readmes_publish_m1_read_only_discovery_boundary() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
-def test_architecture_documents_m1_passive_and_m2_active_boundaries() -> None:
+def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
     architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
 
     for required in (
         "device_catalog.py",
@@ -110,6 +111,35 @@ def test_architecture_documents_m1_passive_and_m2_active_boundaries() -> None:
         "not ProductIDs.g_products",
     ):
         assert required in architecture
+
+    for required in (
+        "G0",
+        "FakeBackend",
+        "N3Adapter",
+        "helper process",
+        "does not activate `6602:1000`",
+        "does not import the vendored SDK",
+        "G1",
+        "G7",
+    ):
+        assert required in architecture
+
+    for required in (
+        "tasks/prd-m2-n3-v3-hardware-controls.md",
+        "docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md",
+        "**Status:** In progress — G0 foundation only",
+        "- [x] Define and test the hardware-free Adapter contracts",
+        "- [ ] G1:",
+        "- [ ] G2:",
+        "- [ ] G3–G7:",
+    ):
+        assert required in roadmap
+
+    for document in (architecture, roadmap):
+        for line in document.splitlines():
+            assert not (
+                "6602:1000" in line and "supported" in line.lower()
+            ), f"unsupported compatibility claim: {line}"
 
 
 def test_readme_has_no_inherited_release_claims() -> None:
