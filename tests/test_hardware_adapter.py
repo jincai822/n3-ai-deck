@@ -271,7 +271,7 @@ def test_adapter_rejects_non_bool_confirmation_without_mutating_session(
     adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
     session = adapter.gate.session
     assert session is not None
-    call_counts = list(session.call_counts)
+    call_counts = session.call_counts
     backend_calls = list(backend.calls)
 
     with pytest.raises(GateViolation) as raised:
@@ -279,7 +279,7 @@ def test_adapter_rejects_non_bool_confirmation_without_mutating_session(
 
     assert raised.value.code is ErrorCode.PARAMETER_NOT_ALLOWED
     assert adapter.state is AdapterState.CANDIDATE
-    assert adapter.gate.session is session
+    assert adapter.gate.session == session
     assert session.call_counts == call_counts
     assert backend.calls == backend_calls
 

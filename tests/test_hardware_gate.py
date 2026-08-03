@@ -17,7 +17,7 @@ from streamdock_n3.hardware.contracts import (
     Stage,
     StageManifest,
 )
-from streamdock_n3.hardware.gate import CapabilityGate, GateViolation
+from streamdock_n3.hardware.gate import CapabilityGate, GateViolation, StageSession
 from tests.hardware_fixtures import TEST_COMMIT, TEST_IMAGE, make_manifest, make_profile
 
 
@@ -193,14 +193,14 @@ def test_non_bool_confirmation_is_rejected_without_mutating_gate(
     succeed(gate, command)
     session = gate.session
     assert session is not None
-    call_counts = list(session.call_counts)
+    call_counts = session.call_counts
 
     with pytest.raises(GateViolation) as raised:
         gate.complete(cast(bool, manual_confirmation))
 
     assert raised.value.code is ErrorCode.PARAMETER_NOT_ALLOWED
     assert gate.state is AdapterState.CANDIDATE
-    assert gate.session is session
+    assert gate.session == session
     assert session.call_counts == call_counts
 
 
@@ -213,6 +213,53 @@ def test_non_success_result_blocks_and_clears_session() -> None:
 
     assert gate.state is AdapterState.BLOCKED
     assert gate.session is None
+
+
+def test_public_state_cannot_be_reassigned_after_failure() -> None:
+    gate = make_gate(AdapterState.PROFILE_APPROVED)
+    begin(gate, Stage.G3_INPUT)
+    gate.authorize(AdapterCommand(Operation.OBSERVE_INPUTS))
+    gate.record_result(OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0))
+
+    with pytest.raises(AttributeError):
+        gate.state = AdapterState.PROFILE_APPROVED  # type: ignore[misc]
+
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_public_session_cannot_be_injected_after_failure() -> None:
+    gate = make_gate(AdapterState.PROFILE_APPROVED)
+    manifest = make_manifest(Stage.G3_INPUT)
+    gate.begin(make_profile(), manifest, TEST_COMMIT)
+    gate.authorize(AdapterCommand(Operation.OBSERVE_INPUTS))
+    gate.record_result(OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0))
+
+    with pytest.raises(AttributeError):
+        gate.session = StageSession(manifest, (1,))  # type: ignore[misc]
+
+    assert gate.session is None
+    with pytest.raises(GateViolation) as raised:
+        gate.complete(manual_confirmation=True)
+    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_session_exposes_an_immutable_call_count_snapshot() -> None:
+    gate = make_gate(AdapterState.PROFILE_APPROVED)
+    command = AdapterCommand(Operation.OBSERVE_INPUTS)
+    begin(gate, Stage.G3_INPUT, (command,))
+    snapshot = gate.session
+    assert snapshot is not None
+
+    assert snapshot.call_counts == (0,)
+    with pytest.raises(AttributeError):
+        snapshot.call_counts = (1,)  # type: ignore[misc]
+
+    gate.authorize(command)
+    current = gate.session
+    assert current is not None
+    assert snapshot.call_counts == (0,)
+    assert current.call_counts == (1,)
 
 
 @pytest.mark.parametrize(

@@ -70,34 +70,49 @@ class GateViolation(Exception):
         super().__init__(code.value)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class StageSession:
-    """The active manifest and per-rule authorization counts."""
+    """A read-only snapshot of the active manifest and authorization counts."""
 
     manifest: StageManifest
-    call_counts: list[int]
+    call_counts: tuple[int, ...]
 
 
 class CapabilityGate:
     """Advance a capability state only after a fully authorized stage completes."""
 
+    __slots__ = ("_call_counts", "_manifest", "_state")
+
     def __init__(self, initial_state: AdapterState = AdapterState.CANDIDATE) -> None:
         if not isinstance(initial_state, AdapterState):
             raise TypeError("initial_state must be an AdapterState")
-        self.state = initial_state
-        self.session: StageSession | None = None
+        self._state = initial_state
+        self._manifest: StageManifest | None = None
+        self._call_counts: list[int] | None = None
+
+    @property
+    def state(self) -> AdapterState:
+        """Return the current capability state without exposing mutation."""
+        return self._state
+
+    @property
+    def session(self) -> StageSession | None:
+        """Return an immutable snapshot of the active stage, if any."""
+        if self._manifest is None or self._call_counts is None:
+            return None
+        return StageSession(self._manifest, tuple(self._call_counts))
 
     def begin(self, profile: DeviceProfile, manifest: StageManifest, current_commit: str) -> None:
         """Open an authorized stage without changing its capability state."""
-        if self.session is not None:
+        if self._manifest is not None or self._call_counts is not None:
             raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
-        if self.state in _TERMINAL_STATES:
+        if self._state in _TERMINAL_STATES:
             raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
         transition = _TRANSITIONS.get(manifest.stage)
         if transition is None:
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
         expected_state, _next_state = transition
-        if self.state is not expected_state:
+        if self._state is not expected_state:
             raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
         if manifest.commit != current_commit:
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
@@ -113,12 +128,13 @@ class CapabilityGate:
             for rule in manifest.allowed_commands
         ):
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
-        self.session = StageSession(manifest, [0] * len(manifest.allowed_commands))
+        self._manifest = manifest
+        self._call_counts = [0] * len(manifest.allowed_commands)
 
     def authorize(self, command: AdapterCommand) -> None:
         """Authorize one exact command against the first matching rule with capacity."""
-        session = self._require_session()
-        rules = session.manifest.allowed_commands
+        manifest, call_counts = self._require_session()
+        rules = manifest.allowed_commands
         if not any(rule.operation is command.operation for rule in rules):
             raise GateViolation(ErrorCode.OPERATION_NOT_ALLOWED)
         exact_match_found = False
@@ -126,8 +142,8 @@ class CapabilityGate:
             if not rule.matches(command):
                 continue
             exact_match_found = True
-            if session.call_counts[index] < rule.max_calls:
-                session.call_counts[index] += 1
+            if call_counts[index] < rule.max_calls:
+                call_counts[index] += 1
                 return
         if exact_match_found:
             raise GateViolation(ErrorCode.CALL_LIMIT_EXCEEDED)
@@ -137,36 +153,45 @@ class CapabilityGate:
         """Record a backend result, blocking immediately on every non-success result."""
         self._require_session()
         if not result.succeeded:
-            self.state = AdapterState.BLOCKED
-            self.session = None
+            self._state = AdapterState.BLOCKED
+            self._manifest = None
+            self._call_counts = None
 
     def complete(self, manual_confirmation: bool) -> AdapterState:
         """Complete the active stage only after manual confirmation and required calls."""
         if not isinstance(manual_confirmation, bool):
             raise GateViolation(ErrorCode.PARAMETER_NOT_ALLOWED)
-        session = self._require_session()
+        manifest, call_counts = self._require_session()
         if not manual_confirmation:
-            self.state = AdapterState.BLOCKED
-            self.session = None
-            return self.state
+            self._state = AdapterState.BLOCKED
+            self._manifest = None
+            self._call_counts = None
+            return self._state
         if any(
             call_count < rule.min_calls
-            for call_count, rule in zip(session.call_counts, session.manifest.allowed_commands, strict=True)
+            for call_count, rule in zip(call_counts, manifest.allowed_commands, strict=True)
         ):
             raise GateViolation(ErrorCode.REQUIRED_CALL_MISSING)
-        _expected_state, next_state = _TRANSITIONS[session.manifest.stage]
-        self.state = next_state
-        self.session = None
-        return self.state
+        expected_state, next_state = _TRANSITIONS[manifest.stage]
+        if self._state is not expected_state:
+            self._state = AdapterState.BLOCKED
+            self._manifest = None
+            self._call_counts = None
+            raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
+        self._state = next_state
+        self._manifest = None
+        self._call_counts = None
+        return self._state
 
     def disconnect(self) -> AdapterState:
         """Permanently disconnect every nonterminal state and clear its active session."""
-        if self.state not in _TERMINAL_STATES:
-            self.state = AdapterState.DISCONNECTED
-        self.session = None
-        return self.state
+        if self._state not in _TERMINAL_STATES:
+            self._state = AdapterState.DISCONNECTED
+        self._manifest = None
+        self._call_counts = None
+        return self._state
 
-    def _require_session(self) -> StageSession:
-        if self.session is None:
+    def _require_session(self) -> tuple[StageManifest, list[int]]:
+        if self._manifest is None or self._call_counts is None:
             raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
-        return self.session
+        return self._manifest, self._call_counts

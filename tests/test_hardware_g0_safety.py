@@ -49,7 +49,7 @@ REVIEWED_SOURCE_SHA256 = {
         "83ab0484cbb4c2d295f4b38d0474819206ca3cb98e8d84c770e600e61db81e57"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "2d21590eb9a1088935942bef2fb3f01ba2cd37b0512bff83c69a9f6ff2c9399f"
+        "47f6a0dc27bb48b90fbfd66eabcc999164aa75afcc67280d95a6f1a2d5f979d2"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
@@ -1370,7 +1370,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     fake_backend = backend.FakeBackend(events=(event,))
     recorder = evidence.EvidenceRecorder()
     capability_gate = gate.CapabilityGate()
-    stage_session = gate.StageSession(manifest, [0])
+    stage_session = gate.StageSession(manifest, (0,))
     gate_violation = gate.GateViolation(contracts.ErrorCode.STATE_NOT_ALLOWED)
     n3_adapter = adapter.N3Adapter(profile, "0123456789abcdef", fake_backend, evidence=recorder)
     request = ipc.IpcRequest(profile, state, manifest, command)
