@@ -118,6 +118,7 @@ def test_helper_ignores_cwd_and_pythonpath_shadow_packages(
 ) -> None:
     shadow = tmp_path / "streamdock_n3" / "hardware"
     shadow.mkdir(parents=True)
+    (shadow.parent / "__init__.py").write_text("", encoding="utf-8")
     (shadow / "__init__.py").write_text("", encoding="utf-8")
     (shadow / "helper_main.py").write_text(
         "raise SystemExit('shadow-helper-executed')\n",

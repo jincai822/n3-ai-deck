@@ -227,6 +227,74 @@ class ThrowingSink:
         raise RuntimeError("private sink failure")
 
 
+class ArmedThrowingSink:
+    def __init__(self) -> None:
+        self.armed = False
+
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        if self.armed:
+            raise RuntimeError("armed sink failure")
+
+
+class ArmedReentrantSink:
+    def __init__(self) -> None:
+        self.adapter: N3Adapter | None = None
+        self.armed = False
+
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        if self.armed:
+            assert self.adapter is not None
+            with pytest.raises(GateViolation) as raised:
+                self.adapter.recover(image_command(2, "base"))
+            assert raised.value.code is ErrorCode.STALE_RESERVATION
+
+
+@pytest.mark.parametrize("sink_type", (ArmedThrowingSink, ArmedReentrantSink))
+def test_disconnect_survives_evidence_failure_after_earned_g7_recovery(
+    sink_type: type[ArmedThrowingSink] | type[ArmedReentrantSink],
+) -> None:
+    disconnected = OperationResult(
+        ResultStatus.DISCONNECTED,
+        ErrorCode.DEVICE_DISCONNECTED,
+        0,
+    )
+    backend = FakeBackend(scripted_results=(success(),) * 10 + (disconnected,))
+    sink = sink_type()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend, sink)
+    for stage in STAGES:
+        if stage is Stage.G7_SIX_LCD:
+            break
+        complete_stage(adapter, stage)
+    if isinstance(sink, ArmedReentrantSink):
+        sink.adapter = adapter
+    adapter.begin_stage(make_manifest(Stage.G7_SIX_LCD))
+    assert adapter.execute(image_command(1, "test")).succeeded
+    assert adapter.execute(image_command(2, "test")).succeeded
+    sink.armed = True
+
+    if isinstance(sink, ArmedReentrantSink):
+        with pytest.raises(GateViolation) as raised:
+            adapter.execute(image_command(3, "test"))
+        assert raised.value.code is ErrorCode.STALE_RESERVATION
+        expected_evidence_error = ErrorCode.STALE_RESERVATION
+    else:
+        assert adapter.execute(image_command(3, "test")) == disconnected
+        expected_evidence_error = ErrorCode.EVIDENCE_FAILURE
+
+    assert adapter.state is AdapterState.DISCONNECTED
+    assert adapter.session_snapshot is None
+    failed = adapter.evidence_records[-1]
+    assert failed.disposition is EvidenceDisposition.FAILED
+    assert failed.error_code is expected_evidence_error
+    calls = len(backend.calls)
+    with pytest.raises(GateViolation) as raised:
+        adapter.recover(image_command(2, "base"))
+    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+    assert len(backend.calls) == calls
+
+
 def test_throwing_sink_blocks_before_operation_or_stage_advancement() -> None:
     adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), ThrowingSink())
     adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
@@ -236,6 +304,33 @@ def test_throwing_sink_blocks_before_operation_or_stage_advancement() -> None:
     assert result.error_code is ErrorCode.EVIDENCE_FAILURE
     assert adapter.state is AdapterState.BLOCKED
     assert adapter.evidence_records[-1].disposition is EvidenceDisposition.FAILED
+
+
+class GateViolationSink:
+    def __init__(self, code: ErrorCode, fail_on_call: int = 1) -> None:
+        self._code = code
+        self._fail_on_call = fail_on_call
+        self.calls = 0
+
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        self.calls += 1
+        if self.calls == self._fail_on_call:
+            raise GateViolation(self._code)
+
+
+def test_callback_gate_violation_none_normalizes_and_finalizes_operation_evidence() -> None:
+    sink = GateViolationSink(ErrorCode.NONE)
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+
+    result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+
+    assert result.error_code is ErrorCode.EVIDENCE_FAILURE
+    assert adapter.state is AdapterState.BLOCKED
+    failed = adapter.evidence_records[-1]
+    assert failed.disposition is EvidenceDisposition.FAILED
+    assert failed.error_code is ErrorCode.EVIDENCE_FAILURE
 
 
 class SecondWriteThrowingSink:
@@ -262,6 +357,25 @@ def test_stage_sink_failure_occurs_before_profile_commit() -> None:
     assert adapter.state is AdapterState.BLOCKED
     assert adapter.capability_snapshot.profile_digest is None
     assert adapter.evidence_records[-1].disposition is EvidenceDisposition.FAILED
+
+
+@pytest.mark.parametrize("callback_code", (ErrorCode.NONE, ErrorCode.PROFILE_MISMATCH))
+def test_callback_gate_violation_normalizes_without_masking_evidence_failure(
+    callback_code: ErrorCode,
+) -> None:
+    sink = GateViolationSink(callback_code, fail_on_call=2)
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+
+    with pytest.raises(GateViolation) as raised:
+        adapter.complete_stage(True)
+
+    assert raised.value.code is ErrorCode.EVIDENCE_FAILURE
+    assert adapter.state is AdapterState.BLOCKED
+    failed = adapter.evidence_records[-1]
+    assert failed.disposition is EvidenceDisposition.FAILED
+    assert failed.error_code is ErrorCode.EVIDENCE_FAILURE
 
 
 class ReentrantSink:

@@ -211,9 +211,10 @@ def test_precommit_callback_failure_never_advances_state() -> None:
     gate = ready_g1_gate()
     preview = gate.preview_completion(True, None)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(GateViolation) as raised:
         gate.commit(preview, lambda: (_ for _ in ()).throw(RuntimeError("sink")))
 
+    assert raised.value.code is ErrorCode.EVIDENCE_FAILURE
     assert gate.state is AdapterState.BLOCKED
     assert gate.capability_snapshot.profile_digest is None
 
@@ -379,3 +380,44 @@ def test_command_policy_rejects_pinned_identity_for_g1() -> None:
         )
 
     assert raised.value.code is ErrorCode.PROFILE_MISMATCH
+
+
+@pytest.mark.parametrize(
+    ("state", "stage", "phase", "pinned"),
+    (
+        (AdapterState.CANDIDATE, Stage.G2_PERMISSION, StagePhase.FORWARD, False),
+        (AdapterState.BLOCKED, Stage.G2_PERMISSION, StagePhase.FORWARD, True),
+        (AdapterState.BLOCKED, Stage.G5_BRIGHTNESS, StagePhase.RECOVERY, True),
+        (AdapterState.DISCONNECTED, Stage.G2_PERMISSION, StagePhase.FORWARD, True),
+        (AdapterState.PROFILE_APPROVED, Stage.G4_INITIALIZATION, StagePhase.FORWARD, True),
+    ),
+)
+def test_command_policy_rejects_state_that_cannot_source_stage(
+    state: AdapterState,
+    stage: Stage,
+    phase: StagePhase,
+    pinned: bool,
+) -> None:
+    profile = make_profile()
+    capability = CapabilitySnapshot(
+        state,
+        profile.digest() if pinned else None,
+        profile.bcd_device if pinned else None,
+        profile.interface if pinned else None,
+        1,
+        stage,
+        phase,
+    )
+    command = (
+        AdapterCommand(Operation.SET_BRIGHTNESS, brightness=50)
+        if phase is StagePhase.RECOVERY
+        else {
+            Stage.G2_PERMISSION: AdapterCommand(Operation.RECORD_PERMISSION),
+            Stage.G4_INITIALIZATION: AdapterCommand(Operation.INITIALIZE),
+        }[stage]
+    )
+
+    with pytest.raises(GateViolation) as raised:
+        CommandPolicy.validate(profile, capability, make_manifest(stage), 0, command)
+
+    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED

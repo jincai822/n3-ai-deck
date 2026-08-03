@@ -49,13 +49,13 @@ REVIEWED_SOURCE_SHA256 = {
         "e391d36f42540034d26898183b2909057779b03f39e85be2c1c9574b4585d610"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "064bcbae8af3d3fc836a41536138f4970144e4af3a19e3a49855b4991bfc0216"
+        "d7a062c37e031c822ff9ecee32495ae888a0878b2b0f95e354b30ca7e7c7f6a5"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "8cab4301ff7204e8a47554e839177744033a77237e946373c5681a1725410d4d"
+        "a15cfaaa167d6fe117a879dd617f046aafa15c7af2abfa5a94b40d680bb2651d"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
         "c3bf0cb263d6f30d657497c8821982135de78f1707a4aca9610879fff800cc5b"

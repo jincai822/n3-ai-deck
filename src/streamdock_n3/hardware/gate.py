@@ -332,8 +332,11 @@ class _CapabilityGate:
             evidence_callback()
         except Exception:
             self._committing = False
+            if preview.epoch != self._epoch:
+                self._block_and_clear()
+                raise GateViolation(ErrorCode.STALE_RESERVATION) from None
             self._block_and_clear()
-            raise
+            raise GateViolation(ErrorCode.EVIDENCE_FAILURE) from None
         self._committing = False
         if preview.epoch != self._epoch or self._state is not state_before_callback:
             self._violate(ErrorCode.STALE_RESERVATION)
@@ -450,6 +453,9 @@ class CommandPolicy:
             and capability.interface == profile.interface
         ):
             raise GateViolation(ErrorCode.PROFILE_MISMATCH)
+        transition = _TRANSITIONS.get(manifest.stage)
+        if transition is None or capability.state is not transition[0]:
+            raise GateViolation(ErrorCode.STATE_NOT_ALLOWED)
         if capability.stage is not manifest.stage or capability.phase not in (
             StagePhase.FORWARD,
             StagePhase.RECOVERY,

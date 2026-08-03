@@ -161,13 +161,30 @@ class N3Adapter:
             self._gate.capability_snapshot.epoch,
         )
         token = self._evidence.begin(record)
+        callback_epoch = self._gate.capability_snapshot.epoch
         try:
             if self._external_evidence is not None:
                 self._external_evidence.record(record)
         except Exception:
-            self._evidence.fail(token, ErrorCode.EVIDENCE_FAILURE)
+            reentrant = self._gate.capability_snapshot.epoch != callback_epoch
+            evidence_error = (
+                ErrorCode.STALE_RESERVATION if reentrant else ErrorCode.EVIDENCE_FAILURE
+            )
+            self._evidence.fail(token, evidence_error)
+            if result.status is ResultStatus.DISCONNECTED:
+                self._gate.disconnect()
+                if reentrant:
+                    raise GateViolation(ErrorCode.STALE_RESERVATION) from None
+                return result
+            if reentrant:
+                raise GateViolation(ErrorCode.STALE_RESERVATION) from None
             self._gate.fail_evidence(reservation)
             return OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.EVIDENCE_FAILURE, 0)
+        if self._gate.capability_snapshot.epoch != callback_epoch:
+            self._evidence.fail(token, ErrorCode.STALE_RESERVATION)
+            if result.status is ResultStatus.DISCONNECTED:
+                self._gate.disconnect()
+            raise GateViolation(ErrorCode.STALE_RESERVATION)
         try:
             self._gate.settle(reservation, result)
         except GateViolation as error:
