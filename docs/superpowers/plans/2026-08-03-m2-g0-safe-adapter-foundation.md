@@ -167,7 +167,7 @@ Construct invalid values lazily so collection reaches the assertion:
         lambda: replace(make_manifest(Stage.G3_INPUT), stage=Stage.G0_SIMULATION),
         lambda: replace(make_manifest(Stage.G3_INPUT), profile_digest="short"),
         lambda: replace(make_manifest(Stage.G3_INPUT), deadline_ms=0),
-        lambda: replace(make_manifest(Stage.G3_INPUT), expected_result="/home/alice"),
+        lambda: replace(make_manifest(Stage.G3_INPUT), expected_result="unsafe value"),
         lambda: replace(
             make_manifest(Stage.G3_INPUT),
             allowed_commands=(
@@ -1076,7 +1076,7 @@ represented by `null` or zero according to the closed schema.
 Execute an image command containing all of these byte markers:
 
 ```python
-sensitive_image = b"/home/alice /srv/workspace /dev/hidraw7 serial_number=SECRET image-bytes"
+sensitive_image = b"LOCAL_USER_PATH WORKSPACE_PATH DEVICE_NODE serial_number=SECRET image-bytes"
 ```
 
 Assert none of the markers, the image bytes, or `command.image_digest()` occurs in `to_json()`.
