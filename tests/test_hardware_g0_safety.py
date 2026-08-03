@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import importlib
 import json
 import re
@@ -67,6 +68,37 @@ FORBIDDEN_FILE_METHODS = {
     "chmod",
     "chown",
 }
+ALLOWED_STDLIB_IMPORTS = {
+    "__future__",
+    "base64",
+    "binascii",
+    "collections.abc",
+    "dataclasses",
+    "enum",
+    "hashlib",
+    "json",
+    "re",
+    "subprocess",
+    "sys",
+    "types",
+    "typing",
+}
+ALLOWED_PROJECT_IMPORTS = {
+    "streamdock_n3.device_catalog",
+    *G0_IMPORTS,
+}
+DYNAMIC_RESOLUTION_CALLS = {
+    "__import__",
+    "compile",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "import_module",
+    "locals",
+    "setattr",
+    "vars",
+}
 
 
 def _source(path: Path) -> str:
@@ -79,9 +111,7 @@ def _trees() -> Iterator[tuple[Path, ast.Module]]:
 
 
 def _project_import_allowed(module: str) -> bool:
-    return module == "streamdock_n3.device_catalog" or (
-        module == "streamdock_n3.hardware" or module.startswith("streamdock_n3.hardware.")
-    )
+    return module in ALLOWED_PROJECT_IMPORTS
 
 
 def _module_name(path: Path) -> str:
@@ -113,10 +143,12 @@ def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> tuple[str,
     base = _from_base(path, node)
     targets: list[str] = []
     for alias in node.names:
-        candidate = base if alias.name == "*" else ".".join(filter(None, (base, alias.name)))
-        # A from-import names a symbol when its source module is already allowlisted;
-        # otherwise the alias is needed to resolve imports from a parent package.
-        targets.append(base if _project_import_allowed(base) else candidate)
+        candidate = ".".join(filter(None, (base, alias.name)))
+        targets.append(
+            base
+            if base in ALLOWED_STDLIB_IMPORTS or _project_import_allowed(base)
+            else candidate
+        )
     return tuple(targets)
 
 
@@ -158,11 +190,12 @@ def _import_violations(path: Path, tree: ast.Module) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
-        for module in _import_targets(path, node):
-            if (
-                module == "streamdock_n3" or module.startswith("streamdock_n3.")
-            ) and not _project_import_allowed(module):
-                violations.append(f"{path}:{node.lineno}: project import {module}")
+        if isinstance(node, ast.ImportFrom) and any(alias.name == "*" for alias in node.names):
+            violations.append(f"{path}:{node.lineno}: star import")
+        targets = _import_targets(path, node)
+        for module in targets:
+            if module not in ALLOWED_STDLIB_IMPORTS and not _project_import_allowed(module):
+                violations.append(f"{path}:{node.lineno}: import outside closed allowlist: {module}")
         if (
             any(
                 canonical == "subprocess" or canonical.startswith("subprocess.")
@@ -188,8 +221,47 @@ def _canonical_calls(path: Path, tree: ast.Module) -> list[tuple[ast.Call, set[s
 
 def _call_violations(path: Path, tree: ast.Module) -> list[str]:
     violations: list[str] = []
+    bindings = _canonical_import_bindings(path, tree)
+    imported_names = set(bindings)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            if node.id in imported_names:
+                violations.append(f"{path}:{node.lineno}: imported binding mutation {node.id}")
+        elif isinstance(node, ast.arg) and node.arg in imported_names:
+            violations.append(f"{path}:{node.lineno}: imported binding shadow {node.arg}")
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            mutated = imported_names.intersection(node.names)
+            if mutated:
+                violations.append(
+                    f"{path}:{node.lineno}: imported binding scope mutation {sorted(mutated)[0]}"
+                )
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and isinstance(
+            node.value, (ast.Name, ast.Attribute)
+        ):
+            value = node.value
+            canonical_values = _canonical_names(value, bindings)
+            if (
+                isinstance(value, ast.Name)
+                and value.id in DYNAMIC_RESOLUTION_CALLS
+                or isinstance(value, ast.Attribute)
+                and value.attr == "import_module"
+                or any(
+                    name == "builtins.open"
+                    or name == "os.open"
+                    or name == "subprocess"
+                    or name.startswith("subprocess.")
+                    for name in canonical_values
+                )
+            ):
+                violations.append(f"{path}:{node.lineno}: dangerous assignment alias")
     for call, canonical_names in _canonical_calls(path, tree):
         function = call.func
+        lexical_name = function.id if isinstance(function, ast.Name) else ""
+        if lexical_name in DYNAMIC_RESOLUTION_CALLS or (
+            isinstance(function, ast.Attribute) and function.attr == "import_module"
+        ):
+            lexical_name = lexical_name or function.attr
+            violations.append(f"{path}:{call.lineno}: dynamic resolution call {lexical_name}")
         # Intentional conservative policy: any method with a file-mutating/opening
         # name is rejected even when static analysis cannot prove its receiver type.
         if isinstance(function, ast.Attribute) and function.attr in FORBIDDEN_FILE_METHODS:
@@ -219,77 +291,65 @@ def _literal(value: ast.expr | None, expected: object) -> bool:
     return isinstance(value, ast.Constant) and value.value == expected
 
 
-def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
-    return {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+def _fixed_argv(call: ast.Call, bindings: dict[str, set[str]]) -> bool:
+    if len(call.args) != 1 or not isinstance(call.args[0], (ast.List, ast.Tuple)):
+        return False
+    value = call.args[0]
+    return (
+        len(value.elts) == 3
+        and _canonical_names(value.elts[0], bindings) == {"sys.executable"}
+        and _literal(value.elts[1], "-m")
+        and isinstance(value.elts[2], ast.Name)
+        and value.elts[2].id == "HELPER_MODULE"
+    )
 
 
-def _enclosing_function(
-    call: ast.Call, parents: dict[ast.AST, ast.AST]
-) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    current: ast.AST = call
-    while current in parents:
-        current = parents[current]
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return current
-    return None
-
-
-def _scope_nodes(
-    scope: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> Iterator[ast.AST]:
-    pending: list[ast.AST] = list(reversed(scope.body))
-    while pending:
-        node = pending.pop()
-        yield node
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue
-        pending.extend(reversed(tuple(ast.iter_child_nodes(node))))
-
-
-def _fixed_argv_value(
-    tree: ast.Module,
-    call: ast.Call,
-    bindings: dict[str, set[str]],
-) -> ast.expr | None:
-    if len(call.args) != 1 or not isinstance(call.args[0], ast.Name):
-        return None
-    argv_name = call.args[0].id
-    parents = _parent_map(tree)
-    scope = _enclosing_function(call, parents)
-    if scope is None:
-        return None
-    stores = [
-        node
-        for node in _scope_nodes(scope)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == argv_name
+def _single_exact_import(tree: ast.Module, module: str) -> bool:
+    matching = [
+        alias
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if (alias.asname or alias.name.split(".", 1)[0]) == module
     ]
-    if len(stores) != 1:
-        return None
-    assignment = parents.get(stores[0])
-    if not isinstance(assignment, (ast.Assign, ast.AnnAssign)):
-        return None
-    value = assignment.value
-    if value is None or parents.get(assignment) is not scope:
-        return None
-    top_statement: ast.AST = call
-    while parents.get(top_statement) is not scope:
-        parent = parents.get(top_statement)
-        if parent is None:
-            return None
-        top_statement = parent
-    if not isinstance(top_statement, ast.stmt):
-        return None
-    if scope.body.index(assignment) >= scope.body.index(top_statement):
-        return None
-    if not isinstance(value, ast.List) or len(value.elts) != 3:
-        return None
-    if _canonical_names(value.elts[0], bindings) != {"sys.executable"}:
-        return None
-    if not _literal(value.elts[1], "-m"):
-        return None
-    if not isinstance(value.elts[2], ast.Name) or value.elts[2].id != "HELPER_MODULE":
-        return None
-    return value
+    return len(matching) == 1 and matching[0].name == module and matching[0].asname is None
+
+
+def _symbol_is_immutable(
+    tree: ast.Module,
+    symbol: str,
+    *,
+    allowed_store: ast.Name | None = None,
+) -> bool:
+    for node in ast.walk(tree):
+        if (
+            (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and node.id == symbol
+                and node is not allowed_store
+            )
+            or (isinstance(node, ast.arg) and node.arg == symbol)
+            or (isinstance(node, (ast.Global, ast.Nonlocal)) and symbol in node.names)
+            or (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and isinstance(node.value, ast.Name)
+                and node.value.id == symbol
+            )
+        ):
+            return False
+    return True
+
+
+def _bounded_timeout(value: ast.expr | None) -> bool:
+    return (
+        isinstance(value, ast.BinOp)
+        and isinstance(value.op, ast.Div)
+        and isinstance(value.left, ast.Name)
+        and value.left.id == "timeout_ms"
+        and _literal(value.right, 1000)
+    )
 
 
 def _fixed_helper_violations(trees: Sequence[tuple[Path, ast.Module]]) -> list[str]:
@@ -311,22 +371,29 @@ def _fixed_helper_violations(trees: Sequence[tuple[Path, ast.Module]]) -> list[s
         violations.append(f"{path}:{call.lineno}: only ipc.py subprocess.run is allowed")
 
     helper_assignments = [
-        node.value
+        node
         for node in tree.body
         if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "HELPER_MODULE" for target in node.targets
-        )
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "HELPER_MODULE"
     ]
-    if len(helper_assignments) != 1 or not _literal(
-        helper_assignments[0] if helper_assignments else None,
-        "streamdock_n3.hardware.helper_main",
+    helper_assignment = helper_assignments[0] if len(helper_assignments) == 1 else None
+    helper_store = helper_assignment.targets[0] if helper_assignment is not None else None
+    if (
+        helper_assignment is None
+        or not _literal(helper_assignment.value, "streamdock_n3.hardware.helper_main")
+        or not _symbol_is_immutable(tree, "HELPER_MODULE", allowed_store=helper_store)
     ):
         violations.append("HELPER_MODULE must have one literal module-scope definition")
-    if _fixed_argv_value(tree, call, bindings) is None:
-        violations.append(
-            f"{path}:{call.lineno}: argv lacks one safe reaching definition in the call's function"
-        )
+    if not _single_exact_import(tree, "sys") or not _symbol_is_immutable(tree, "sys"):
+        violations.append("sys must be one immutable exact import")
+    if not _single_exact_import(tree, "subprocess") or not _symbol_is_immutable(
+        tree, "subprocess"
+    ):
+        violations.append("subprocess must be one immutable exact import")
+    if not _fixed_argv(call, bindings):
+        violations.append(f"{path}:{call.lineno}: argv must be the direct exact fixed sequence")
 
     keyword_names = [keyword.arg for keyword in call.keywords]
     expected_keywords = {
@@ -353,62 +420,239 @@ def _fixed_helper_violations(trees: Sequence[tuple[Path, ast.Module]]) -> list[s
     ):
         if not _literal(_keyword(call, name), expected):
             violations.append(f"{path}:{call.lineno}: invalid subprocess {name}")
-    if _keyword(call, "timeout") is None:
-        violations.append(f"{path}:{call.lineno}: subprocess timeout is required")
+    if not _bounded_timeout(_keyword(call, "timeout")):
+        violations.append(f"{path}:{call.lineno}: subprocess timeout must be timeout_ms / 1000")
     if _keyword(call, "shell") is not None:
         violations.append(f"{path}:{call.lineno}: subprocess shell is forbidden")
     return violations
 
 
-def _expression_names(expression: ast.AST) -> set[str]:
-    return {
-        node.attr if isinstance(node, ast.Attribute) else node.id
-        for node in ast.walk(expression)
-        if isinstance(node, (ast.Attribute, ast.Name))
-    }
+def _simple_bindings(tree: ast.Module) -> dict[str, ast.expr | None]:
+    bindings: dict[str, ast.expr | None] = {}
+
+    def bind(name: str, value: ast.expr) -> None:
+        bindings[name] = value if name not in bindings else None
+
+    for statement in tree.body:
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            if statement.value is not None:
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id != "g_products":
+                        bind(target.id, statement.value)
+        elif isinstance(statement, ast.ClassDef):
+            for member in statement.body:
+                if isinstance(member, (ast.Assign, ast.AnnAssign)):
+                    targets = member.targets if isinstance(member, ast.Assign) else [member.target]
+                    if member.value is not None:
+                        for target in targets:
+                            if isinstance(target, ast.Name):
+                                bind(f"{statement.name}.{target.id}", member.value)
+    return bindings
+
+
+def _qualified_name(expression: ast.expr) -> str | None:
+    if isinstance(expression, ast.Name):
+        return expression.id
+    if isinstance(expression, ast.Attribute):
+        base = _qualified_name(expression.value)
+        return f"{base}.{expression.attr}" if base is not None else None
+    return None
+
+
+def _resolved_int(
+    expression: ast.expr,
+    bindings: dict[str, ast.expr | None],
+    seen: frozenset[str] = frozenset(),
+) -> int | None:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, int) and not isinstance(
+        expression.value, bool
+    ):
+        return expression.value
+    name = _qualified_name(expression)
+    if name is None or name in seen:
+        return None
+    value = bindings.get(name)
+    if value is None:
+        return None
+    return _resolved_int(value, bindings, seen | {name})
+
+
+def _collection_entries(
+    expression: ast.expr,
+    bindings: dict[str, ast.expr | None],
+    seen: frozenset[str] = frozenset(),
+) -> list[ast.expr] | None:
+    name = _qualified_name(expression)
+    if name is not None and not isinstance(expression, (ast.List, ast.Tuple)):
+        if name in seen or bindings.get(name) is None:
+            return None
+        value = bindings[name]
+        assert value is not None
+        return _collection_entries(value, bindings, seen | {name})
+    if not isinstance(expression, (ast.List, ast.Tuple)):
+        return None
+    entries: list[ast.expr] = []
+    for item in expression.elts:
+        if isinstance(item, ast.Starred):
+            expanded = _collection_entries(item.value, bindings, seen)
+            if expanded is None:
+                return None
+            entries.extend(expanded)
+        else:
+            entries.append(item)
+    return entries
+
+
+def _entry_is_candidate(
+    expression: ast.expr,
+    bindings: dict[str, ast.expr | None],
+) -> bool | None:
+    name = _qualified_name(expression)
+    if name is not None and not isinstance(expression, (ast.List, ast.Tuple)):
+        value = bindings.get(name)
+        if value is None:
+            return None
+        return _entry_is_candidate(value, bindings)
+    if not isinstance(expression, (ast.List, ast.Tuple)) or len(expression.elts) < 2:
+        return None
+    vid = _resolved_int(expression.elts[0], bindings)
+    pid = _resolved_int(expression.elts[1], bindings)
+    if vid is None or pid is None:
+        return None
+    return (vid, pid) == (0x6602, 0x1000)
+
+
+def _target_uses_alias(target: ast.expr, aliases: set[str]) -> bool:
+    if isinstance(target, ast.Name):
+        return target.id in aliases
+    if isinstance(target, ast.Subscript):
+        return isinstance(target.value, ast.Name) and target.value.id in aliases
+    if isinstance(target, (ast.List, ast.Tuple)):
+        return any(_target_uses_alias(item, aliases) for item in target.elts)
+    return False
 
 
 def _candidate_product_mapping_violations(source: str) -> list[int]:
     tree = ast.parse(source, filename="ProductIDs.py")
-    mappings: list[ast.expr] = []
+    bindings = _simple_bindings(tree)
+    aliases = {"g_products"}
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if isinstance(node.value, ast.Name) and node.value.id in aliases:
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in aliases:
+                        aliases.add(target.id)
+                        changed = True
+
+    violations: list[int] = []
+
+    def check_entry(entry: ast.expr, lineno: int) -> None:
+        result = _entry_is_candidate(entry, bindings)
+        if result is not False:
+            violations.append(lineno)
+
+    def check_collection(value: ast.expr, lineno: int) -> None:
+        entries = _collection_entries(value, bindings)
+        if entries is None:
+            violations.append(lineno)
+            return
+        for entry in entries:
+            check_entry(entry, getattr(entry, "lineno", lineno))
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(
-                isinstance(target, ast.Name) and target.id == "g_products" for target in targets
+            if value is None:
+                if any(_target_uses_alias(target, aliases) for target in targets):
+                    violations.append(node.lineno)
+                continue
+            if (
+                isinstance(value, ast.Attribute)
+                and isinstance(value.value, ast.Name)
+                and value.value.id in aliases
             ):
-                value = node.value
-                if isinstance(value, (ast.List, ast.Tuple)):
-                    mappings.extend(value.elts)
-        elif (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "g_products"
-            and node.func.attr == "append"
-            and len(node.args) == 1
-        ):
-            mappings.append(node.args[0])
-    return [
-        mapping.lineno
-        for mapping in mappings
-        if isinstance(mapping, (ast.Tuple, ast.List))
-        and {"USB_VIDN3E", "USB_PID_STREAMDOCK_N1EN"} <= _expression_names(mapping)
-    ]
+                violations.append(node.lineno)
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == "g_products":
+                    check_collection(value, node.lineno)
+                elif isinstance(target, ast.Name) and target.id in aliases:
+                    if not (isinstance(value, ast.Name) and value.id in aliases):
+                        violations.append(node.lineno)
+                elif _target_uses_alias(target, aliases):
+                    violations.append(node.lineno)
+        elif isinstance(node, ast.AugAssign) and _target_uses_alias(node.target, aliases):
+            if isinstance(node.op, ast.Add):
+                check_collection(node.value, node.lineno)
+            else:
+                violations.append(node.lineno)
+        elif isinstance(node, ast.Delete):
+            if any(_target_uses_alias(target, aliases) for target in node.targets):
+                violations.append(node.lineno)
+        elif isinstance(node, ast.Call):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in aliases
+            ):
+                if node.keywords:
+                    violations.append(node.lineno)
+                elif node.func.attr == "append" and len(node.args) == 1:
+                    check_entry(node.args[0], node.lineno)
+                elif node.func.attr == "extend" and len(node.args) == 1:
+                    check_collection(node.args[0], node.lineno)
+                elif node.func.attr == "insert" and len(node.args) == 2:
+                    check_entry(node.args[1], node.lineno)
+                else:
+                    violations.append(node.lineno)
+            elif any(
+                isinstance(argument, ast.Name) and argument.id in aliases
+                for argument in (*node.args, *(keyword.value for keyword in node.keywords))
+            ):
+                violations.append(node.lineno)
+    return sorted(set(violations))
 
 
-UDEV_CANDIDATE_VENDOR = re.compile(
-    r"(?:ATTR|ATTRS)\s*\{\s*idVendor\s*\}\s*==\s*[\"']6602[\"']",
+UDEV_VENDOR_MATCH = re.compile(
+    r"(?:ATTR|ATTRS)\s*\{\s*idVendor\s*\}\s*==\s*([\"'])(.*?)\1",
     re.IGNORECASE,
 )
 
 
+def _logical_udev_lines(source: str) -> Iterator[tuple[int, str]]:
+    start = 0
+    parts: list[str] = []
+    for lineno, physical in enumerate(source.splitlines(), start=1):
+        if not parts and physical.lstrip().startswith("#"):
+            continue
+        if not parts:
+            start = lineno
+        segment = physical.lstrip() if parts else physical
+        stripped = segment.rstrip()
+        continued = stripped.endswith("\\")
+        parts.append(stripped[:-1] if continued else segment)
+        if not continued:
+            yield start, "".join(parts)
+            parts = []
+    if parts:
+        yield start, "".join(parts)
+
+
 def _candidate_udev_rule_violations(source: str) -> list[int]:
-    return [
-        lineno
-        for lineno, line in enumerate(source.splitlines(), start=1)
-        if UDEV_CANDIDATE_VENDOR.search(line.split("#", 1)[0])
-    ]
+    violations: list[int] = []
+    for lineno, line in _logical_udev_lines(source):
+        for match in UDEV_VENDOR_MATCH.finditer(line):
+            alternatives = match.group(2).lower().split("|")
+            if any(fnmatch.fnmatchcase("6602", pattern) for pattern in alternatives):
+                violations.append(lineno)
+                break
+    return violations
 
 
 def _forbidden_runtime_modules(names: Sequence[str]) -> list[str]:
@@ -870,3 +1114,188 @@ ATTR{idProduct}=="6602", TAG+="uaccess"
 )
 def test_udev_gate_rejects_active_candidate_vendor_target_rules(rule: str) -> None:
     assert _candidate_udev_rule_violations(rule) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from os import *\n",
+        "def load():\n    from pyudev import Context\n",
+        "import requests\n",
+        "import importlib\n",
+    ),
+)
+def test_import_gate_is_a_closed_allowlist_and_rejects_star_imports(source: str) -> None:
+    path = Path("src/streamdock_n3/hardware/backend.py")
+
+    assert _import_violations(path, ast.parse(source, filename=str(path))) != []
+
+
+@pytest.mark.parametrize("path", G0_MODULES)
+def test_closed_import_and_call_policy_covers_every_g0_module(path: Path) -> None:
+    tree = ast.parse(
+        "def late_load():\n    from pyudev import Context\n    return __import__('os')\n",
+        filename=str(path),
+    )
+
+    assert _import_violations(path, tree) != []
+    assert _call_violations(path, tree) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "__import__('os')\n",
+        "import_module('os')\n",
+        "getattr(object(), 'open')\n",
+        "setattr(object(), 'run', None)\n",
+        "eval('1')\n",
+        "exec('pass')\n",
+        "compile('pass', '<x>', 'exec')\n",
+        "globals()\n",
+        "locals()\n",
+        "vars()\n",
+    ),
+)
+def test_call_gate_rejects_dynamic_resolution_entry_points(source: str) -> None:
+    path = Path("src/streamdock_n3/hardware/backend.py")
+
+    assert _call_violations(path, ast.parse(source, filename=str(path))) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import subprocess\nlaunch = subprocess.Popen\n",
+        "opener = open\n",
+        "import subprocess as sp\nsp2 = sp\n",
+        "loader = __import__\n",
+        "loader = importlib.import_module\n",
+    ),
+)
+def test_call_gate_rejects_dangerous_callable_and_module_assignment_aliases(
+    source: str,
+) -> None:
+    path = Path("src/streamdock_n3/hardware/backend.py")
+
+    assert _call_violations(path, ast.parse(source, filename=str(path))) != []
+
+
+def _direct_helper_tree(*, prelude: str = "", timeout: str = "timeout_ms / 1000") -> ast.Module:
+    return ast.parse(
+        f'''\
+import subprocess
+import sys
+HELPER_MODULE = "streamdock_n3.hardware.helper_main"
+{prelude}
+def invoke(payload, timeout_ms):
+    return subprocess.run(
+        [sys.executable, "-m", HELPER_MODULE],
+        input=payload, capture_output=True, text=True, encoding="utf-8",
+        errors="strict", check=False, timeout={timeout})
+''',
+        filename="src/streamdock_n3/hardware/ipc.py",
+    )
+
+
+def test_fixed_helper_gate_accepts_only_direct_exact_argv() -> None:
+    path = Path("src/streamdock_n3/hardware/ipc.py")
+
+    assert _fixed_helper_violations(((path, _direct_helper_tree()),)) == []
+
+
+@pytest.mark.parametrize(
+    ("prelude", "timeout"),
+    (
+        ("sys = object()", "timeout_ms / 1000"),
+        ("HELPER_MODULE = 'unsafe.module'", "timeout_ms / 1000"),
+        ("def mutate():\n    global HELPER_MODULE", "timeout_ms / 1000"),
+        (
+            "def outer():\n    HELPER_MODULE = 'unsafe.module'\n"
+            "    def mutate():\n        nonlocal HELPER_MODULE",
+            "timeout_ms / 1000",
+        ),
+        ("", "None"),
+        ("", "timeout_ms"),
+    ),
+)
+def test_fixed_helper_gate_rejects_symbol_mutation_and_unbounded_timeout(
+    prelude: str,
+    timeout: str,
+) -> None:
+    path = Path("src/streamdock_n3/hardware/ipc.py")
+
+    assert _fixed_helper_violations(
+        ((path, _direct_helper_tree(prelude=prelude, timeout=timeout)),)
+    ) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "g_products = []\ng_products += [(0x6602, 0x1000, Device)]\n",
+        "g_products = []\ng_products.extend([(0x6602, 0x1000, Device)])\n",
+        "g_products: list[tuple[int, int, object]] = [(0x6602, 0x1000, Device)]\n",
+        "g_products = []\ng_products.insert(0, (0x6602, 0x1000, Device))\n",
+        "entries = [(0x6602, 0x1000, Device)]\ng_products = [*entries]\n",
+        "VID = 0x6602\nPID = 0x1000\ng_products = [(VID, PID, Device)]\n",
+        "entry = (0x6602, 0x1000, Device)\ng_products = [entry]\n",
+        (
+            "class V:\n    ID = 0x6602\nclass P:\n    ID = 0x1000\n"
+            "g_products = [(V.ID, P.ID, Device)]\n"
+        ),
+        "g_products = []\nproducts = g_products\nproducts.append((0x6602, 0x1000, Device))\n",
+    ),
+)
+def test_candidate_mapping_gate_rejects_all_supported_writer_and_value_forms(
+    source: str,
+) -> None:
+    assert _candidate_product_mapping_violations(source) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "g_products = []\ng_products.insert(0, unknown_entry)\n",
+        "g_products = []\ng_products[0] = unknown_entry\n",
+        "g_products = []\ndel g_products[0]\n",
+        "g_products = []\ng_products.clear()\n",
+        "g_products = []\nmutate(g_products)\n",
+        "g_products = []\nwriter = g_products.append\nwriter(unknown_entry)\n",
+    ),
+)
+def test_candidate_mapping_gate_fails_closed_for_unknown_writers(source: str) -> None:
+    assert _candidate_product_mapping_violations(source) != []
+
+
+def test_candidate_mapping_gate_uses_values_instead_of_dangerous_looking_names() -> None:
+    source = '''
+USB_VIDN3E = 0x6603
+USB_PID_STREAMDOCK_N1EN = 0x1001
+g_products = [(USB_VIDN3E, USB_PID_STREAMDOCK_N1EN, Device)]
+'''
+
+    assert _candidate_product_mapping_violations(source) == []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    (
+        'ATTR{idVendor}=="660[2]", TAG+="uaccess"\n',
+        'ATTRS{idVendor}=="660?", TAG+="uaccess"\n',
+        'ATTR{idVendor}=="660?|6602", TAG+="uaccess"\n',
+        'ATTR{idVendor}=="6602", ENV{NOTE}="# retained"\n',
+        'ATTR{idVendor}=="660\\\n    2", TAG+="uaccess"\n',
+    ),
+)
+def test_udev_gate_rejects_patterns_and_continuations_matching_candidate(rule: str) -> None:
+    assert _candidate_udev_rule_violations(rule) != []
+
+
+def test_udev_gate_preserves_quoted_hash_and_only_ignores_full_line_comments() -> None:
+    source = '''
+   # ATTR{idVendor}=="6602"
+ATTR{idVendor}=="6602", ENV{NOTE}="# candidate"
+'''
+
+    assert _candidate_udev_rule_violations(source) == [3]

@@ -385,10 +385,9 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
     ):
         raise ValueError("invalid_timeout")
 
-    argv = [sys.executable, "-m", HELPER_MODULE]
     try:
         completed = subprocess.run(
-            argv,
+            [sys.executable, "-m", HELPER_MODULE],
             input=encode_request(request) + "\n",
             capture_output=True,
             text=True,
