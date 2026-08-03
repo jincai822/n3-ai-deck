@@ -72,6 +72,26 @@ def test_manifest_digest_preserves_repeated_steps_and_order() -> None:
     assert manifest.digest() != replace(manifest, steps=(second, first, first)).digest()
 
 
+def test_manifest_rejects_empty_step_tuple_directly() -> None:
+    with pytest.raises(ValueError, match="^steps must be a non-empty tuple$"):
+        replace(make_manifest(Stage.G1_PROFILE), steps=())
+
+
+def test_manifest_rejects_step_list_directly() -> None:
+    manifest = make_manifest(Stage.G1_PROFILE)
+
+    with pytest.raises(ValueError, match="^steps must be a non-empty tuple$"):
+        replace(manifest, steps=list(manifest.steps))  # type: ignore[arg-type]
+
+
+def test_manifest_rejects_non_command_step_directly() -> None:
+    with pytest.raises(TypeError, match="^steps must contain CommandStep values$"):
+        replace(
+            make_manifest(Stage.G1_PROFILE),
+            steps=(object(),),  # type: ignore[arg-type]
+        )
+
+
 def test_capability_and_session_snapshots_are_closed_immutable_values() -> None:
     capability = CapabilitySnapshot(
         state=AdapterState.CANDIDATE,

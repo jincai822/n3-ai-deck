@@ -8,6 +8,10 @@ M1's approved testable scope and safety boundary are defined in
 M2's approved scope and G0 design are defined in
 [the hardware-controls PRD](tasks/prd-m2-n3-v3-hardware-controls.md) and
 [the hardware-controls design](docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md).
+The transactional G0 safety boundary is defined in
+[the transactional Adapter safety design](docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md)
+and its
+[hardening plan](docs/superpowers/plans/2026-08-03-m2-g0-transactional-adapter-safety-hardening.md).
 
 ## M0 — Public foundation
 
@@ -28,6 +32,11 @@ M2's approved scope and G0 design are defined in
 ## M2 — Hardware controls
 
 **Status:** In progress — G0 foundation only
+
+G0 is a hardware-free transactional simulation foundation. It proves ordered private
+reservations, exactly-once fake backend attempts, redacted evidence acceptance, settlement,
+recovery, and isolated stateless helper validation without activating hardware. Helper
+snapshots are validation context, not state authority.
 
 - [x] Define and test the hardware-free Adapter contracts, capability gate, FakeBackend,
   fake-only helper isolation, and redacted evidence.

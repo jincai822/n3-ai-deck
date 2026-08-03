@@ -4,23 +4,25 @@ N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passi
 
 ## G0 implemented safety boundary
 
-Only the hardware-free G0 simulation foundation is implemented. It has two independent simulation paths:
+Only the hardware-free G0 simulation foundation is implemented. Its Adapter and helper paths are independent:
 
 ```text
 M1 passive observation
   -> immutable test/profile contract
-  -> CapabilityGate
-  -> N3Adapter
-  -> FakeBackend
-  -> redacted in-memory evidence
 
-fake-only helper process
-  -> CapabilityGate
-  -> FakeBackend
-  -> OperationResult
+N3Adapter transaction coordinator
+  -> private capability reservation
+  -> FakeBackend exactly once
+  -> redacted evidence acceptance
+  -> private settlement / stage commit
+
+fake-only isolated helper process
+  -> stateless CommandPolicy
+  -> FakeBackend exactly once
+  -> OperationResult only
 ```
 
-The helper path is independent: `N3Adapter` does not invoke the helper process, and the helper returns an `OperationResult` without automatically connecting to the Adapter's evidence recorder.
+`N3Adapter` is the sole stateful transaction coordinator. Its private gate owns ordered reservations, result settlement, recovery, and stage commits; the backend and evidence sinks receive no live gate authority. The helper path is independent: `N3Adapter` does not invoke it, and it returns only an `OperationResult` without connecting to the Adapter's evidence recorder. Helper snapshots are validation context, not state authority.
 
 `FakeBackend` is the only implemented backend. G0 does not activate `6602:1000`: that identifier remains a candidate, unvalidated, and has no selected production interface or active profile. G0 does not import the vendored SDK, open `/dev`, install permissions, or write hardware.
 

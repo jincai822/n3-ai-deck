@@ -118,6 +118,8 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "N3Adapter",
         "helper process",
         "does not activate `6602:1000`",
+        "candidate",
+        "unvalidated",
         "does not import the vendored SDK",
         "G1",
         "G7",
@@ -126,17 +128,30 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
     ):
         assert required in architecture
 
-    assert "N3Adapter\n  -> FakeBackend\n  -> redacted in-memory evidence" in architecture
     assert (
-        "fake-only helper process\n  -> CapabilityGate\n  -> FakeBackend\n  -> OperationResult"
+        "N3Adapter transaction coordinator\n"
+        "  -> private capability reservation\n"
+        "  -> FakeBackend exactly once\n"
+        "  -> redacted evidence acceptance\n"
+        "  -> private settlement / stage commit"
+    ) in architecture
+    assert (
+        "fake-only isolated helper process\n"
+        "  -> stateless CommandPolicy\n"
+        "  -> FakeBackend exactly once\n"
+        "  -> OperationResult only"
         in architecture
     )
+    assert "Helper snapshots are validation context, not state authority." in architecture
     assert "FakeBackend or fake-only helper process" not in architecture
 
     for required in (
         "tasks/prd-m2-n3-v3-hardware-controls.md",
         "docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md",
+        "docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md",
+        "docs/superpowers/plans/2026-08-03-m2-g0-transactional-adapter-safety-hardening.md",
         "**Status:** In progress — G0 foundation only",
+        "hardware-free transactional simulation foundation",
         "- [x] Define and test the hardware-free Adapter contracts",
         "- [ ] G1:",
         "- [ ] G2:",
@@ -147,7 +162,8 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
     for document in (architecture, roadmap):
         for line in document.splitlines():
             assert not (
-                "6602:1000" in line and "supported" in line.lower()
+                "6602:1000" in line
+                and ("supported" in line.lower() or "已支持" in line)
             ), f"unsupported compatibility claim: {line}"
 
 
