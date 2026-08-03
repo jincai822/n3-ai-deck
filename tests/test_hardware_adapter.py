@@ -17,7 +17,7 @@ from streamdock_n3.hardware.contracts import (
     Stage,
     StageManifest,
 )
-from streamdock_n3.hardware.gate import GateViolation
+from streamdock_n3.hardware.gate import CapabilityGate, GateViolation
 from tests.hardware_fixtures import TEST_COMMIT, make_manifest, make_profile
 
 
@@ -151,6 +151,23 @@ def test_backend_failure_blocks_adapter_and_prevents_completion(status: ResultSt
     assert len(backend.calls) == 3
     with pytest.raises(GateViolation) as raised:
         adapter.complete_stage(True)
+    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+
+
+def test_failed_adapter_gate_reference_cannot_be_replaced() -> None:
+    adapter, backend = make_adapter(
+        FakeBackend(outcomes={Operation.APPROVE_PROFILE: ResultStatus.BACKEND_ERROR})
+    )
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+
+    with pytest.raises(AttributeError):
+        adapter.gate = CapabilityGate()  # type: ignore[misc]
+
+    assert adapter.state is AdapterState.BLOCKED
+    assert len(backend.calls) == 1
+    with pytest.raises(GateViolation) as raised:
+        adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
     assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
 
 

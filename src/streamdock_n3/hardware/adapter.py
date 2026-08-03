@@ -55,7 +55,12 @@ class N3Adapter:
         self.current_commit = current_commit
         self.backend = backend
         self.evidence = evidence
-        self.gate = CapabilityGate(initial_state)
+        self._gate = CapabilityGate(initial_state)
+
+    @property
+    def gate(self) -> CapabilityGate:
+        """Return the adapter-owned gate without allowing reference replacement."""
+        return self._gate
 
     @property
     def state(self) -> AdapterState:

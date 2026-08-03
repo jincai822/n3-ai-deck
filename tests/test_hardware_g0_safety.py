@@ -55,7 +55,7 @@ REVIEWED_SOURCE_SHA256 = {
         "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "e0f74049bbd59a9353e214aa1b7bb2539f86e6a0526fc470e9e0b7a2d03105e8"
+        "816d5e368152b58ea872284314c52e138a580aa29a8e5a748ed3a4336bdd3788"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
         "b5a06f8e8c77c2c947dd62040f80e71f7d7acc7dcf628995d29a936edb0c4046"
