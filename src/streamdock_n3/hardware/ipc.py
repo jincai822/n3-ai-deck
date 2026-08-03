@@ -387,17 +387,28 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
             input=encode_request(request) + "\n",
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             check=False,
             timeout=timeout_ms / 1000,
         )
     except subprocess.TimeoutExpired:
         return _runner_failure(ResultStatus.TIMEOUT, ErrorCode.DEADLINE_EXCEEDED, timeout_ms)
+    except UnicodeError:
+        return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     except OSError:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.HELPER_CRASHED)
 
     if completed.returncode != 0:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.HELPER_CRASHED)
     if not isinstance(completed.stdout, str):
+        return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
+    if (
+        completed.stdout == "\n"
+        or not completed.stdout.endswith("\n")
+        or completed.stdout.count("\n") != 1
+        or "\r" in completed.stdout
+    ):
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     try:
         response_size = len(completed.stdout.encode("utf-8"))
@@ -406,6 +417,6 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
     if response_size > MAX_RESPONSE_BYTES:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     try:
-        return decode_response(completed.stdout)
+        return decode_response(completed.stdout[:-1])
     except ValueError:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)

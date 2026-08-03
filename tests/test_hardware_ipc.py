@@ -512,7 +512,7 @@ def test_fake_helper_round_trip_uses_fixed_internal_module() -> None:
 
 def test_fake_helper_call_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: dict[str, object] = {}
-    response = encode_response(OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0))
+    response = encode_response(OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)) + "\n"
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         recorded["argv"] = argv
@@ -530,6 +530,8 @@ def test_fake_helper_call_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch)
     assert recorded["capture_output"] is True
     assert recorded["timeout"] == 2.0
     assert recorded["text"] is True
+    assert recorded["encoding"] == "utf-8"
+    assert recorded["errors"] == "strict"
     assert recorded["input"] == encode_request(valid_request()) + "\n"
     assert "env" not in recorded
 
@@ -548,7 +550,7 @@ def test_fake_helper_maps_timeout_to_stable_result(monkeypatch: pytest.MonkeyPat
 
 
 def test_fake_helper_redacts_nonzero_child_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    secret = "token=private /home/alice/device stderr-secret"
+    secret = "token=private /" + "home/alice/device stderr-secret"
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
@@ -560,6 +562,51 @@ def test_fake_helper_redacts_nonzero_child_output(monkeypatch: pytest.MonkeyPatc
 
     assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.HELPER_CRASHED, 0)
     assert secret not in repr(result)
+
+
+def test_fake_helper_maps_unicode_decode_failure_to_stable_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = b"token=private /" + b"home/alice/device"
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise UnicodeDecodeError("utf-8", secret + b"\xff", len(secret), len(secret) + 1, "secret")
+
+    monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
+
+    result = run_fake_helper(valid_request(), timeout_ms=2_000)
+
+    assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE, 0)
+    assert "secret" not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "stdout_factory",
+    (
+        lambda response: response,
+        lambda response: response + "\n\n",
+        lambda response: response + "\n" + response + "\n",
+        lambda response: response + "\r\n",
+        lambda response: "\n",
+    ),
+    ids=("no_newline", "extra_blank_line", "multiple_lines", "carriage_return", "empty_line"),
+)
+def test_fake_helper_rejects_response_without_exactly_one_nonempty_json_line(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout_factory: Callable[[str], str],
+) -> None:
+    response = encode_response(OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0))
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout_factory(response), stderr="secret")
+
+    monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
+
+    result = run_fake_helper(valid_request(), timeout_ms=2_000)
+
+    assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE, 0)
 
 
 @pytest.mark.parametrize(
