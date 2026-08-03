@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import tokenize
 import tomllib
 import zipfile
 from collections.abc import Iterator, Sequence
@@ -27,13 +28,19 @@ G0_MODULES = (
     Path("src/streamdock_n3/hardware/helper_main.py"),
     Path("src/streamdock_n3/hardware/evidence.py"),
 )
+G0_DEPENDENCY_MODULES = (
+    Path("src/streamdock_n3/__init__.py"),
+    Path("src/streamdock_n3/device_catalog.py"),
+)
+G0_SOURCE_CLOSURE = (*G0_MODULES, *G0_DEPENDENCY_MODULES)
 
 REVIEWED_SOURCE_PATHS = (
-    *G0_MODULES,
+    *G0_SOURCE_CLOSURE,
     Path("src/streamdock_n3/_vendor/StreamDock/ProductIDs.py"),
     Path("src/streamdock_n3/_data/99-streamdock.rules"),
     Path("pyproject.toml"),
 )
+WHEEL_REVIEWED_PATHS = REVIEWED_SOURCE_PATHS[:-1]
 REVIEWED_SOURCE_SHA256 = {
     Path("src/streamdock_n3/hardware/__init__.py"): (
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
@@ -58,6 +65,12 @@ REVIEWED_SOURCE_SHA256 = {
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
         "5d9484d50a2f66b859dda802f35a6a82385e11f39949d92ec8125600230619d4"
+    ),
+    Path("src/streamdock_n3/__init__.py"): (
+        "0612dae9f893b0736b2bbc584afc2fa001e4e7468ab622a9e0061453f5b4d04b"
+    ),
+    Path("src/streamdock_n3/device_catalog.py"): (
+        "59f02515d616b684d331d855ed2415cbbf8d2750bc3db85c425a78e911731f5f"
     ),
     Path("src/streamdock_n3/_vendor/StreamDock/ProductIDs.py"): (
         "f367c2db9d884cbe01a14f1eb8fd992c84d23342607260e3981573b27e6dce3f"
@@ -94,6 +107,11 @@ G0_IMPORTS = tuple(
     f"streamdock_n3.hardware{'.' + path.stem if path.stem != '__init__' else ''}"
     for path in G0_MODULES
 )
+G0_SOURCE_CLOSURE_IMPORTS = (
+    "streamdock_n3",
+    "streamdock_n3.device_catalog",
+    *G0_IMPORTS,
+)
 FORBIDDEN_RUNTIME_MODULES = (
     "streamdock_n3._vendor",
     "ctypes",
@@ -119,7 +137,9 @@ ALLOWED_STDLIB_IMPORTS = {
     "dataclasses",
     "enum",
     "hashlib",
+    "importlib.metadata",
     "json",
+    "os",
     "re",
     "subprocess",
     "sys",
@@ -127,6 +147,7 @@ ALLOWED_STDLIB_IMPORTS = {
     "typing",
 }
 ALLOWED_PROJECT_IMPORTS = {
+    "streamdock_n3",
     "streamdock_n3.device_catalog",
     *G0_IMPORTS,
 }
@@ -166,6 +187,27 @@ MUTATING_METHODS = {
     "update",
 }
 PROTECTED_SYMBOLS = {"HELPER_MODULE", "subprocess", "sys"}
+FORBIDDEN_OS_PROCESS_CALLS = {
+    "os.fork",
+    "os.forkpty",
+    "os.popen",
+    "os.posix_spawn",
+    "os.posix_spawnp",
+    "os.startfile",
+    "os.system",
+}
+IMPORT_TIME_ALLOWED_CALLS = {
+    "KnownUsbDevice",
+    "ValueError",
+    "_build_known_usb_device_lookup",
+    "dataclasses.dataclass",
+    "frozenset",
+    "hasattr",
+    "importlib.metadata.version",
+    "os.geteuid",
+    "re.compile",
+    "types.MappingProxyType",
+}
 
 
 def _source(path: Path) -> str:
@@ -173,8 +215,17 @@ def _source(path: Path) -> str:
 
 
 def _trees() -> Iterator[tuple[Path, ast.Module]]:
-    for path in G0_MODULES:
+    for path in G0_SOURCE_CLOSURE:
         yield path, ast.parse(_source(path), filename=str(path))
+
+
+def _forbidden_source_violations(path: Path, source: str) -> list[str]:
+    if path in G0_MODULES:
+        scanned = source
+    else:
+        tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
+        scanned = "".join(token.string for token in tokens if token.type != tokenize.COMMENT)
+    return [forbidden for forbidden in FORBIDDEN_SOURCE if forbidden in scanned]
 
 
 def _project_import_allowed(module: str) -> bool:
@@ -213,7 +264,7 @@ def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> tuple[str,
         candidate = ".".join(filter(None, (base, alias.name)))
         targets.append(
             base
-            if base != "streamdock_n3.hardware"
+            if base not in {"streamdock_n3", "streamdock_n3.hardware"}
             and (base in ALLOWED_STDLIB_IMPORTS or _project_import_allowed(base))
             else candidate
         )
@@ -337,8 +388,13 @@ def _contains_uncalled_dangerous_reference(
     )
 
 
-def _allowed_helper_definition(tree: ast.Module, node: ast.AST, target: ast.expr) -> bool:
-    return (
+def _allowed_protected_mutation(
+    path: Path,
+    tree: ast.Module,
+    node: ast.AST,
+    target: ast.expr,
+) -> bool:
+    helper_definition = (
         node in tree.body
         and isinstance(node, ast.Assign)
         and len(node.targets) == 1
@@ -347,6 +403,18 @@ def _allowed_helper_definition(tree: ast.Module, node: ast.AST, target: ast.expr
         and target.id == "HELPER_MODULE"
         and _literal(node.value, "streamdock_n3.hardware.helper_main")
     )
+    root_bytecode_guard = (
+        path == Path("src/streamdock_n3/__init__.py")
+        and isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and target is node.targets[0]
+        and isinstance(target, ast.Attribute)
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "sys"
+        and target.attr == "dont_write_bytecode"
+        and _literal(node.value, True)
+    )
+    return helper_definition or root_bytecode_guard
 
 
 def _call_violations(path: Path, tree: ast.Module) -> list[str]:
@@ -380,8 +448,8 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
         else:
             targets = []
         for target in targets:
-            if _contains_protected_symbol(target, bindings) and not _allowed_helper_definition(
-                tree, node, target
+            if _contains_protected_symbol(target, bindings) and not _allowed_protected_mutation(
+                path, tree, node, target
             ):
                 violations.append(f"{path}:{node.lineno}: protected symbol mutation")
     for call, canonical_names in _canonical_calls(path, tree):
@@ -416,6 +484,125 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 f"{path}:{call.lineno}: subprocess function "
                 f"{', '.join(sorted(subprocess_functions))}"
             )
+        os_process_functions = {
+            name
+            for name in canonical_names
+            if name in FORBIDDEN_OS_PROCESS_CALLS
+            or name.startswith("os.exec")
+            or name.startswith("os.spawn")
+        }
+        if os_process_functions:
+            violations.append(
+                f"{path}:{call.lineno}: OS process function "
+                f"{', '.join(sorted(os_process_functions))}"
+            )
+    return violations
+
+
+def _lexical_call_name(expression: ast.expr) -> str:
+    if isinstance(expression, ast.Name):
+        return expression.id
+    if isinstance(expression, ast.Attribute):
+        base = _lexical_call_name(expression.value)
+        return f"{base}.{expression.attr}" if base else expression.attr
+    return ""
+
+
+def _is_main_guard(node: ast.If) -> bool:
+    expected = ast.parse("__name__ == '__main__'", mode="eval").body
+    return ast.dump(node.test) == ast.dump(expected)
+
+
+def _import_time_side_effect_violations(path: Path, tree: ast.Module) -> list[str]:
+    bindings = _canonical_import_bindings(path, tree)
+    local_functions = {
+        statement.name: statement
+        for statement in tree.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    violations: list[str] = []
+    visited_functions: set[str] = set()
+    function_depth = 0
+
+    class ImportTimeVisitor(ast.NodeVisitor):
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    self.visit(default)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            for base in node.bases:
+                self.visit(base)
+            for keyword in node.keywords:
+                self.visit(keyword.value)
+            for decorator in node.decorator_list:
+                self.visit(decorator)
+            for statement in node.body:
+                self.visit(statement)
+
+        def visit_If(self, node: ast.If) -> None:
+            self.visit(node.test)
+            statements = node.orelse if _is_main_guard(node) else (*node.body, *node.orelse)
+            for statement in statements:
+                self.visit(statement)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal function_depth
+            lexical = _lexical_call_name(node.func)
+            canonical = _canonical_names(node.func, bindings)
+            names = canonical or {lexical}
+            if not names or not names <= IMPORT_TIME_ALLOWED_CALLS:
+                violations.append(f"{path}:{node.lineno}: import-time call {sorted(names)}")
+            if lexical in local_functions and lexical not in visited_functions:
+                visited_functions.add(lexical)
+                function_depth += 1
+                for statement in local_functions[lexical].body:
+                    self.visit(statement)
+                function_depth -= 1
+            self.generic_visit(node)
+
+        def _check_target(self, node: ast.AST, target: ast.expr) -> None:
+            if not isinstance(target, (ast.Attribute, ast.Subscript)):
+                return
+            canonical = _canonical_names(target, bindings)
+            if function_depth and not canonical:
+                return
+            allowed = (
+                path == Path("src/streamdock_n3/__init__.py")
+                and canonical == {"sys.dont_write_bytecode"}
+                and isinstance(node, ast.Assign)
+                and _literal(node.value, True)
+            )
+            if not allowed:
+                violations.append(f"{path}:{node.lineno}: import-time external mutation")
+
+        def visit_Assign(self, node: ast.Assign) -> None:
+            for target in node.targets:
+                self._check_target(node, target)
+            self.visit(node.value)
+
+        def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+            self._check_target(node, node.target)
+            if node.value is not None:
+                self.visit(node.value)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            self._check_target(node, node.target)
+            self.visit(node.value)
+
+        def visit_Delete(self, node: ast.Delete) -> None:
+            for target in node.targets:
+                self._check_target(node, target)
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self._check_target(node, node.target)
+            self.visit(node.value)
+
+    ImportTimeVisitor().visit(tree)
     return violations
 
 
@@ -989,6 +1176,21 @@ def _reviewed_source_snapshot_violations(sources: dict[Path, bytes]) -> list[Pat
     return [*violations, *sorted(set(sources) - set(REVIEWED_SOURCE_PATHS))]
 
 
+def _wheel_member(path: Path) -> str:
+    return path.relative_to("src").as_posix()
+
+
+def _wheel_reviewed_source_violations(
+    members: dict[str, bytes],
+    sources: dict[Path, bytes],
+) -> list[Path]:
+    return [
+        path
+        for path in WHEEL_REVIEWED_PATHS
+        if path not in sources or members.get(_wheel_member(path)) != sources[path]
+    ]
+
+
 def _forbidden_runtime_modules(names: Sequence[str]) -> list[str]:
     return sorted(
         name
@@ -1028,9 +1230,8 @@ def built_wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_g0_sources_contain_no_forbidden_hardware_or_system_strings() -> None:
     violations = [
         f"{path}: {forbidden}"
-        for path in G0_MODULES
-        for forbidden in FORBIDDEN_SOURCE
-        if forbidden in _source(path)
+        for path in G0_SOURCE_CLOSURE
+        for forbidden in _forbidden_source_violations(path, _source(path))
     ]
 
     assert violations == []
@@ -1052,6 +1253,16 @@ def test_g0_calls_cannot_open_files_or_invoke_process_functions() -> None:
     assert violations == []
 
 
+def test_g0_import_time_behavior_stays_inside_the_reviewed_safe_allowlist() -> None:
+    violations = [
+        violation
+        for path, tree in _trees()
+        for violation in _import_time_side_effect_violations(path, tree)
+    ]
+
+    assert violations == []
+
+
 def test_only_subprocess_run_is_the_fixed_fake_helper_boundary() -> None:
     violations = _fixed_helper_violations(tuple(_trees()))
 
@@ -1061,7 +1272,7 @@ def test_only_subprocess_run_is_the_fixed_fake_helper_boundary() -> None:
 def test_fresh_source_imports_do_not_load_forbidden_runtime_modules() -> None:
     program = (
         "import importlib,json,sys;"
-        f"mods={G0_IMPORTS!r};"
+        f"mods={G0_SOURCE_CLOSURE_IMPORTS!r};"
         "[importlib.import_module(name) for name in mods];"
         "print(json.dumps(sorted(sys.modules)))"
     )
@@ -1199,7 +1410,8 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     }
     declared = {
         node.name
-        for _path, tree in _trees()
+        for path in G0_MODULES
+        for tree in (ast.parse(_source(path), filename=str(path)),)
         for node in tree.body
         if isinstance(node, ast.ClassDef)
     }
@@ -1220,12 +1432,16 @@ def test_candidate_usb_id_is_not_activated_or_granted_a_udev_rule() -> None:
     assert _candidate_udev_rule_violations(udev_rules) == []
 
 
-def test_fresh_wheel_contains_every_g0_module(built_wheel: Path) -> None:
-    expected = {str(path.relative_to("src")).replace("\\", "/") for path in G0_MODULES}
+def test_fresh_wheel_contains_exact_reviewed_source_and_data_bytes(built_wheel: Path) -> None:
+    sources = {path: (ROOT / path).read_bytes() for path in WHEEL_REVIEWED_PATHS}
     with zipfile.ZipFile(built_wheel) as archive:
-        packaged = set(archive.namelist())
+        packaged = {
+            member: archive.read(member)
+            for member in archive.namelist()
+            if member in {_wheel_member(path) for path in WHEEL_REVIEWED_PATHS}
+        }
 
-    assert expected <= packaged
+    assert _wheel_reviewed_source_violations(packaged, sources) == []
 
 
 def test_wheel_install_imports_remain_free_of_forbidden_runtime_modules(
@@ -1248,7 +1464,7 @@ def test_wheel_install_imports_remain_free_of_forbidden_runtime_modules(
     )
     program = (
         "import importlib,json,sys;"
-        f"mods={G0_IMPORTS!r};"
+        f"mods={G0_SOURCE_CLOSURE_IMPORTS!r};"
         "[importlib.import_module(name) for name in mods];"
         "print(json.dumps(sorted(sys.modules)))"
     )
@@ -1778,3 +1994,102 @@ def test_reviewed_source_snapshot_gate_rejects_any_covered_byte_mutation(path: P
     sources[path] += b"\n# unreviewed mutation\n"
 
     assert _reviewed_source_snapshot_violations(sources) == [path]
+
+
+def test_complete_g0_source_closure_keeps_the_exact_brief_modules_and_dependencies() -> None:
+    assert (
+        Path("src/streamdock_n3/hardware/__init__.py"),
+        Path("src/streamdock_n3/hardware/contracts.py"),
+        Path("src/streamdock_n3/hardware/gate.py"),
+        Path("src/streamdock_n3/hardware/backend.py"),
+        Path("src/streamdock_n3/hardware/adapter.py"),
+        Path("src/streamdock_n3/hardware/ipc.py"),
+        Path("src/streamdock_n3/hardware/helper_main.py"),
+        Path("src/streamdock_n3/hardware/evidence.py"),
+    ) == G0_MODULES
+    expected_dependencies = (
+        Path("src/streamdock_n3/__init__.py"),
+        Path("src/streamdock_n3/device_catalog.py"),
+    )
+    assert expected_dependencies == G0_DEPENDENCY_MODULES
+    assert (*G0_MODULES, *expected_dependencies) == G0_SOURCE_CLOSURE
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        Path("src/streamdock_n3/__init__.py"),
+        Path("src/streamdock_n3/device_catalog.py"),
+    ),
+)
+def test_dependency_modules_pass_every_static_source_gate(path: Path) -> None:
+    source = _source(path)
+    tree = ast.parse(source, filename=str(path))
+
+    assert _forbidden_source_violations(path, source) == []
+    assert _import_violations(path, tree) == []
+    assert _call_violations(path, tree) == []
+    assert _import_time_side_effect_violations(path, tree) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        Path("src/streamdock_n3/__init__.py"),
+        Path("src/streamdock_n3/device_catalog.py"),
+    ),
+)
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import os\nos.system('unsafe')\n",
+        "open('/tmp/unsafe')\n",
+        "import subprocess\nsubprocess.run(['unsafe'])\n",
+        "__import__('unsafe')\n",
+        "print('unexpected import-time side effect')\n",
+        "import os\nos.environ['UNSAFE'] = '1'\n",
+    ),
+)
+def test_dependency_static_gates_reject_import_time_unsafe_regressions(
+    path: Path,
+    source: str,
+) -> None:
+    tree = ast.parse(source, filename=str(path))
+
+    assert (
+        _import_violations(path, tree)
+        or _call_violations(path, tree)
+        or _import_time_side_effect_violations(path, tree)
+    )
+
+
+def test_reviewed_snapshot_has_the_exact_unique_thirteen_path_closure() -> None:
+    expected_dependencies = (
+        Path("src/streamdock_n3/__init__.py"),
+        Path("src/streamdock_n3/device_catalog.py"),
+    )
+    expected = (
+        *G0_MODULES,
+        *expected_dependencies,
+        Path("src/streamdock_n3/_vendor/StreamDock/ProductIDs.py"),
+        Path("src/streamdock_n3/_data/99-streamdock.rules"),
+        Path("pyproject.toml"),
+    )
+
+    assert expected == REVIEWED_SOURCE_PATHS
+    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 13
+    assert set(REVIEWED_SOURCE_SHA256) == set(REVIEWED_SOURCE_PATHS)
+
+
+def test_wheel_reviewed_paths_include_packaged_closure_but_exclude_pyproject() -> None:
+    assert REVIEWED_SOURCE_PATHS[:-1] == WHEEL_REVIEWED_PATHS
+    assert Path("pyproject.toml") not in WHEEL_REVIEWED_PATHS
+
+
+def test_wheel_byte_gate_rejects_a_mutated_archive_member() -> None:
+    sources = {path: (ROOT / path).read_bytes() for path in WHEEL_REVIEWED_PATHS}
+    members = {_wheel_member(path): content for path, content in sources.items()}
+    mutated = Path("src/streamdock_n3/__init__.py")
+    members[_wheel_member(mutated)] += b"\n# archive-only mutation\n"
+
+    assert _wheel_reviewed_source_violations(members, sources) == [mutated]
