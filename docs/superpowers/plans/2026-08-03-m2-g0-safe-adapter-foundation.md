@@ -1,5 +1,13 @@
 # M2 G0 Safe Adapter Foundation Implementation Plan
 
+> [!WARNING]
+> This historical plan is superseded where it conflicts with
+> `docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md` and
+> `docs/superpowers/plans/2026-08-03-m2-g0-transactional-adapter-safety-hardening.md`.
+> Do not execute its public live-gate, arbitrary `initial_state`, unordered `CommandRule`,
+> caller-supplied `RecoveryStatus`, mutable `HELPER_MODULE`, or post-transition evidence steps.
+> Preserve it only as the implementation history for the original G0 foundation.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the hardware-free G0 foundation for the M2 N3 Adapter: immutable contracts, a fail-closed capability gate, a deterministic FakeBackend, adapter orchestration, fake-only process isolation, and redacted evidence without activating `6602:1000` or touching hardware.
