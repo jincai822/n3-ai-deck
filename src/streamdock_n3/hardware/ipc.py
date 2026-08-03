@@ -35,6 +35,11 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
 
 MAX_REQUEST_BYTES = 1_500_000
 MAX_RESPONSE_BYTES = 1_000_000
+LF_FRAMING_BYTES = 1
+OVERFLOW_SENTINEL_BYTES = 1
+MAX_FRAMED_REQUEST_BYTES = MAX_REQUEST_BYTES + LF_FRAMING_BYTES
+REQUEST_READ_BYTES = MAX_FRAMED_REQUEST_BYTES + OVERFLOW_SENTINEL_BYTES
+MAX_FRAMED_RESPONSE_BYTES = MAX_RESPONSE_BYTES + LF_FRAMING_BYTES
 HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 
 _REQUEST_KEYS = frozenset({"schema_version", "profile", "state", "manifest", "command"})
@@ -414,7 +419,7 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
         response_size = len(completed.stdout.encode("utf-8"))
     except UnicodeError:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
-    if response_size > MAX_RESPONSE_BYTES:
+    if response_size > MAX_FRAMED_RESPONSE_BYTES:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     try:
         return decode_response(completed.stdout[:-1])

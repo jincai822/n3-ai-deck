@@ -2,19 +2,25 @@ from __future__ import annotations
 
 import base64
 import copy
+import io
 import json
 import subprocess
 import sys
 from collections.abc import Callable
+from functools import cache
+from hashlib import sha256
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from streamdock_n3.device_catalog import IdentityStatus, ProtocolStatus
+from streamdock_n3.hardware import helper_main
 from streamdock_n3.hardware.contracts import (
     MAX_IMAGE_BYTES,
     AdapterCommand,
     AdapterState,
+    CommandRule,
     DeviceProfile,
     ErrorCode,
     InputAction,
@@ -24,6 +30,7 @@ from streamdock_n3.hardware.contracts import (
     OperationResult,
     ResultStatus,
     Stage,
+    StageManifest,
 )
 from streamdock_n3.hardware.ipc import (
     MAX_REQUEST_BYTES,
@@ -35,7 +42,13 @@ from streamdock_n3.hardware.ipc import (
     encode_response,
     run_fake_helper,
 )
-from tests.hardware_fixtures import TEST_IMAGE, make_manifest, make_profile
+from tests.hardware_fixtures import (
+    TEST_COMMIT,
+    TEST_IMAGE,
+    TEST_INTERFACE,
+    make_manifest,
+    make_profile,
+)
 
 
 def valid_request() -> IpcRequest:
@@ -45,6 +58,68 @@ def valid_request() -> IpcRequest:
         manifest=make_manifest(Stage.G3_INPUT),
         command=AdapterCommand(Operation.OBSERVE_INPUTS),
     )
+
+
+@cache
+def payload_limit_request() -> IpcRequest:
+    profile = make_profile()
+    image = b"x" * MAX_IMAGE_BYTES
+    command = AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=image)
+    rules = [
+        CommandRule(
+            Operation.SET_KEY_IMAGE,
+            min_calls=1,
+            max_calls=1,
+            key=1,
+            image_sha256=command.image_digest(),
+        )
+    ]
+    rules.extend(
+        CommandRule(
+            Operation.SET_KEY_IMAGE,
+            min_calls=0,
+            max_calls=0,
+            key=(index % 6) + 1,
+            image_sha256=sha256(f"filler-{index}".encode()).hexdigest(),
+        )
+        for index in range(608)
+    )
+    manifest = StageManifest(
+        Stage.G6_ONE_LCD,
+        TEST_COMMIT,
+        profile.digest(),
+        TEST_INTERFACE,
+        tuple(rules),
+        600_000,
+        "x" * 60,
+        "x",
+        "x",
+    )
+    request = IpcRequest(
+        profile,
+        AdapterState.BRIGHTNESS_VALIDATED,
+        manifest,
+        command,
+    )
+
+    assert len(encode_request(request).encode("utf-8")) == MAX_REQUEST_BYTES
+    return request
+
+
+@cache
+def payload_limit_response() -> str:
+    press = NormalizedInputEvent(InputKind.BUTTON, 1, InputAction.PRESS, 0)
+    release = NormalizedInputEvent(InputKind.BUTTON, 1, InputAction.RELEASE, 0)
+    result = OperationResult(
+        ResultStatus.SUCCEEDED,
+        ErrorCode.NONE,
+        0,
+        (press,) * 14_922 + (release,) * 2,
+    )
+    response = encode_response(result)
+
+    assert len(response.encode("utf-8")) == MAX_RESPONSE_BYTES
+    return response
 
 
 def test_ipc_request_rejects_non_integer_schema_version() -> None:
@@ -510,6 +585,36 @@ def test_fake_helper_round_trip_uses_fixed_internal_module() -> None:
     assert result.error_code is ErrorCode.NONE
 
 
+def test_fake_helper_accepts_request_at_exact_payload_limit() -> None:
+    result = run_fake_helper(payload_limit_request(), timeout_ms=10_000)
+
+    assert result.succeeded is True
+    assert result.error_code is ErrorCode.NONE
+
+
+@pytest.mark.parametrize("suffix", (" \n", "\nX"), ids=("payload_over_limit", "trailing_byte"))
+def test_helper_rejects_request_over_framed_limit_before_decode(
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+) -> None:
+    framed = (encode_request(payload_limit_request()) + suffix).encode("utf-8")
+    decode_called = False
+
+    def fail_decode(text: str) -> IpcRequest:
+        nonlocal decode_called
+        del text
+        decode_called = True
+        raise AssertionError("must reject before decode")
+
+    monkeypatch.setattr(helper_main.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(framed)))
+    monkeypatch.setattr(helper_main, "decode_request", fail_decode)
+
+    with pytest.raises(ValueError):
+        helper_main._handle_request()
+
+    assert decode_called is False
+
+
 def test_fake_helper_call_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: dict[str, object] = {}
     response = encode_response(OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)) + "\n"
@@ -601,6 +706,39 @@ def test_fake_helper_rejects_response_without_exactly_one_nonempty_json_line(
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
         return subprocess.CompletedProcess(argv, 0, stdout=stdout_factory(response), stderr="secret")
+
+    monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
+
+    result = run_fake_helper(valid_request(), timeout_ms=2_000)
+
+    assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE, 0)
+
+
+def test_fake_helper_accepts_response_at_exact_payload_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = payload_limit_response()
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout=response + "\n", stderr="")
+
+    monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
+
+    result = run_fake_helper(valid_request(), timeout_ms=2_000)
+
+    assert result.succeeded is True
+    assert len(result.events) == 14_924
+
+
+def test_fake_helper_rejects_response_payload_one_byte_over_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = payload_limit_response() + " "
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        return subprocess.CompletedProcess(argv, 0, stdout=response + "\n", stderr="")
 
     monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
 

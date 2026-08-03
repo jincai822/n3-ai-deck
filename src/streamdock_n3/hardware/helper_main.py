@@ -7,12 +7,17 @@ import sys
 from streamdock_n3.hardware.backend import FakeBackend
 from streamdock_n3.hardware.contracts import ErrorCode, OperationResult, ResultStatus
 from streamdock_n3.hardware.gate import CapabilityGate, GateViolation
-from streamdock_n3.hardware.ipc import MAX_REQUEST_BYTES, decode_request, encode_response
+from streamdock_n3.hardware.ipc import (
+    MAX_FRAMED_REQUEST_BYTES,
+    REQUEST_READ_BYTES,
+    decode_request,
+    encode_response,
+)
 
 
 def _handle_request() -> OperationResult:
-    raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-    if len(raw) > MAX_REQUEST_BYTES:
+    raw = sys.stdin.buffer.read(REQUEST_READ_BYTES)
+    if len(raw) > MAX_FRAMED_REQUEST_BYTES:
         raise ValueError
     text = raw.decode("utf-8", errors="strict")
     if not text.endswith("\n") or text.count("\n") != 1 or "\r" in text:
