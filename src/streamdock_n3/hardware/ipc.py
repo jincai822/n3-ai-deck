@@ -17,7 +17,8 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     SCHEMA_VERSION,
     AdapterCommand,
     AdapterState,
-    CommandRule,
+    CommandSpec,
+    CommandStep,
     DeviceProfile,
     ErrorCode,
     HidInterface,
@@ -63,16 +64,15 @@ _MANIFEST_KEYS = frozenset(
         "commit",
         "profile_digest",
         "interface",
-        "allowed_commands",
+        "steps",
         "deadline_ms",
         "expected_result",
         "recovery_plan",
         "approval_reference",
     }
 )
-_RULE_KEYS = frozenset(
-    {"operation", "min_calls", "max_calls", "brightness", "key", "image_sha256"}
-)
+_SPEC_KEYS = frozenset({"operation", "brightness", "key", "image_sha256"})
+_STEP_KEYS = frozenset({"forward", "recovery"})
 _COMMAND_KEYS = frozenset({"operation", "brightness", "key", "image_base64"})
 _RESPONSE_KEYS = frozenset({"schema_version", "status", "error_code", "duration_ms", "events"})
 _EVENT_KEYS = frozenset({"kind", "control_id", "action", "monotonic_ns"})
@@ -189,22 +189,33 @@ def _parse_profile(value: object) -> DeviceProfile:
     )
 
 
-def _rule_to_wire(rule: CommandRule) -> dict[str, object]:
-    return rule.to_dict()
+def _spec_to_wire(spec: CommandSpec) -> dict[str, object]:
+    return spec.to_dict()
 
 
-def _parse_rule(value: object) -> CommandRule:
-    wire = _require_exact_keys(value, _RULE_KEYS)
+def _parse_spec(value: object) -> CommandSpec:
+    wire = _require_exact_keys(value, _SPEC_KEYS)
     image_sha256_value = wire["image_sha256"]
     if image_sha256_value is not None and not isinstance(image_sha256_value, str):
         raise ValueError
-    return CommandRule(
+    return CommandSpec(
         operation=Operation(_require_str(wire["operation"])),
-        min_calls=_require_int(wire["min_calls"]),
-        max_calls=_require_int(wire["max_calls"]),
         brightness=_require_optional_int(wire["brightness"]),
         key=_require_optional_int(wire["key"]),
         image_sha256=image_sha256_value,
+    )
+
+
+def _step_to_wire(step: CommandStep) -> dict[str, object]:
+    return step.to_dict()
+
+
+def _parse_step(value: object) -> CommandStep:
+    wire = _require_exact_keys(value, _STEP_KEYS)
+    recovery_value = wire["recovery"]
+    return CommandStep(
+        forward=_parse_spec(wire["forward"]),
+        recovery=_parse_spec(recovery_value) if recovery_value is not None else None,
     )
 
 
@@ -215,7 +226,7 @@ def _manifest_to_wire(manifest: StageManifest) -> dict[str, object]:
         "commit": manifest.commit,
         "profile_digest": manifest.profile_digest,
         "interface": _interface_to_wire(manifest.interface),
-        "allowed_commands": [_rule_to_wire(rule) for rule in manifest.allowed_commands],
+        "steps": [_step_to_wire(step) for step in manifest.steps],
         "deadline_ms": manifest.deadline_ms,
         "expected_result": manifest.expected_result,
         "recovery_plan": manifest.recovery_plan,
@@ -225,15 +236,15 @@ def _manifest_to_wire(manifest: StageManifest) -> dict[str, object]:
 
 def _parse_manifest(value: object) -> StageManifest:
     wire = _require_exact_keys(value, _MANIFEST_KEYS)
-    rules_value = wire["allowed_commands"]
-    if not isinstance(rules_value, list):
+    steps_value = wire["steps"]
+    if not isinstance(steps_value, list):
         raise ValueError
     return StageManifest(
         stage=Stage(_require_str(wire["stage"])),
         commit=_require_str(wire["commit"]),
         profile_digest=_require_str(wire["profile_digest"]),
         interface=_parse_interface(wire["interface"]),
-        allowed_commands=tuple(_parse_rule(rule) for rule in rules_value),
+        steps=tuple(_parse_step(step) for step in steps_value),
         deadline_ms=_require_int(wire["deadline_ms"]),
         expected_result=_require_str(wire["expected_result"]),
         recovery_plan=_require_str(wire["recovery_plan"]),
@@ -370,7 +381,9 @@ def decode_response(text: str) -> OperationResult:
     return result
 
 
-def _runner_failure(status: ResultStatus, error_code: ErrorCode, duration_ms: int = 0) -> OperationResult:
+def _runner_failure(
+    status: ResultStatus, error_code: ErrorCode, duration_ms: int = 0
+) -> OperationResult:
     return OperationResult(status, error_code, duration_ms)
 
 

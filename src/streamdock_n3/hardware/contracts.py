@@ -47,6 +47,12 @@ class AdapterState(StrEnum):
     DISCONNECTED = "disconnected"
 
 
+class StagePhase(StrEnum):
+    FORWARD = "forward"
+    RECOVERY = "recovery"
+    READY = "ready"
+
+
 class Operation(StrEnum):
     APPROVE_PROFILE = "approve_profile"
     RECORD_PERMISSION = "record_permission"
@@ -91,6 +97,12 @@ class ErrorCode(StrEnum):
     HELPER_CRASHED = "helper_crashed"
     INVALID_RESPONSE = "invalid_response"
     DEVICE_DISCONNECTED = "device_disconnected"
+    RESULT_MISSING = "result_missing"
+    PROFILE_MISMATCH = "profile_mismatch"
+    ORDER_VIOLATION = "order_violation"
+    RECOVERY_REQUIRED = "recovery_required"
+    STALE_RESERVATION = "stale_reservation"
+    EVIDENCE_FAILURE = "evidence_failure"
 
 
 class RecoveryStatus(StrEnum):
@@ -101,7 +113,9 @@ class RecoveryStatus(StrEnum):
 
 
 def _canonical_digest(value: object) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
     return sha256(encoded).hexdigest()
 
 
@@ -267,39 +281,48 @@ class AdapterCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class CommandRule:
+class CommandSpec:
     operation: Operation
-    min_calls: int
-    max_calls: int
     brightness: int | None = None
     key: int | None = None
     image_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_int(self.min_calls, "min_calls", 0, 12)
-        _validate_int(self.max_calls, "max_calls", 0, 12)
-        if self.min_calls > self.max_calls:
-            raise ValueError("min_calls must not exceed max_calls")
         _validate_rule_shape(self.operation, self.brightness, self.key, self.image_sha256)
 
-    def matches(self, command: AdapterCommand) -> bool:
+    @classmethod
+    def from_command(cls, command: AdapterCommand) -> CommandSpec:
         if not isinstance(command, AdapterCommand):
-            return False
-        return (
-            self.operation is command.operation
-            and self.brightness == command.brightness
-            and self.key == command.key
-            and self.image_sha256 == command.image_digest()
-        )
+            raise TypeError("command must be an AdapterCommand")
+        return cls(command.operation, command.brightness, command.key, command.image_digest())
+
+    def matches(self, command: AdapterCommand) -> bool:
+        return isinstance(command, AdapterCommand) and self == CommandSpec.from_command(command)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "operation": self.operation.value,
-            "min_calls": self.min_calls,
-            "max_calls": self.max_calls,
             "brightness": self.brightness,
             "key": self.key,
             "image_sha256": self.image_sha256,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CommandStep:
+    forward: CommandSpec
+    recovery: CommandSpec | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.forward, CommandSpec):
+            raise TypeError("forward must be a CommandSpec")
+        if self.recovery is not None and not isinstance(self.recovery, CommandSpec):
+            raise TypeError("recovery must be a CommandSpec or None")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "forward": self.forward.to_dict(),
+            "recovery": self.recovery.to_dict() if self.recovery is not None else None,
         }
 
 
@@ -309,7 +332,7 @@ class StageManifest:
     commit: str
     profile_digest: str
     interface: HidInterface
-    allowed_commands: tuple[CommandRule, ...]
+    steps: tuple[CommandStep, ...]
     deadline_ms: int
     expected_result: str
     recovery_plan: str
@@ -325,12 +348,10 @@ class StageManifest:
         _validate_sha256(self.profile_digest, "profile_digest")
         if not isinstance(self.interface, HidInterface):
             raise TypeError("interface must be a HidInterface")
-        if not isinstance(self.allowed_commands, tuple) or not self.allowed_commands:
-            raise ValueError("allowed_commands must be a non-empty tuple")
-        if not all(isinstance(rule, CommandRule) for rule in self.allowed_commands):
-            raise TypeError("allowed_commands must contain CommandRule values")
-        if len(set(self.allowed_commands)) != len(self.allowed_commands):
-            raise ValueError("allowed_commands must not contain duplicate rules")
+        if not isinstance(self.steps, tuple) or not self.steps:
+            raise ValueError("steps must be a non-empty tuple")
+        if not all(isinstance(step, CommandStep) for step in self.steps):
+            raise TypeError("steps must contain CommandStep values")
         _validate_int(self.deadline_ms, "deadline_ms", 1, MAX_DEADLINE_MS)
         _validate_safe_token(self.expected_result, "expected_result")
         _validate_safe_token(self.recovery_plan, "recovery_plan")
@@ -344,7 +365,7 @@ class StageManifest:
             "commit": self.commit,
             "profile_digest": self.profile_digest,
             "interface": self.interface.to_dict(),
-            "allowed_commands": [rule.to_dict() for rule in self.allowed_commands],
+            "steps": [step.to_dict() for step in self.steps],
             "deadline_ms": self.deadline_ms,
             "expected_result": self.expected_result,
             "recovery_plan": self.recovery_plan,
@@ -353,6 +374,60 @@ class StageManifest:
 
     def digest(self) -> str:
         return _canonical_digest(self.to_dict())
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilitySnapshot:
+    state: AdapterState
+    profile_digest: str | None
+    bcd_device: int | None
+    interface: HidInterface | None
+    epoch: int
+    stage: Stage | None
+    phase: StagePhase | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, AdapterState):
+            raise TypeError("state must be an AdapterState")
+        profile_values = (self.profile_digest, self.bcd_device, self.interface)
+        if any(value is None for value in profile_values) and not all(
+            value is None for value in profile_values
+        ):
+            raise ValueError("profile binding must be all present or all absent")
+        if self.profile_digest is not None:
+            _validate_sha256(self.profile_digest, "profile_digest")
+            bcd_device = self.bcd_device
+            if bcd_device is None:
+                raise AssertionError("validated profile binding has no bcd_device")
+            _validate_int(bcd_device, "bcd_device", 0, 0xFFFF)
+            if not isinstance(self.interface, HidInterface):
+                raise TypeError("interface must be a HidInterface")
+        _validate_int(self.epoch, "epoch", 0, 2**63 - 1)
+        if (self.stage is None) != (self.phase is None):
+            raise ValueError("stage and phase must both be present or both be absent")
+        if self.stage is not None and not isinstance(self.stage, Stage):
+            raise TypeError("stage must be a Stage or None")
+        if self.phase is not None and not isinstance(self.phase, StagePhase):
+            raise TypeError("phase must be a StagePhase or None")
+
+
+@dataclass(frozen=True, slots=True)
+class StageSessionSnapshot:
+    stage: Stage
+    phase: StagePhase
+    forward_index: int
+    recovery_remaining: int
+    pending_reservation: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.stage, Stage):
+            raise TypeError("stage must be a Stage")
+        if not isinstance(self.phase, StagePhase):
+            raise TypeError("phase must be a StagePhase")
+        _validate_int(self.forward_index, "forward_index", 0, 2**63 - 1)
+        _validate_int(self.recovery_remaining, "recovery_remaining", 0, 2**63 - 1)
+        if not isinstance(self.pending_reservation, bool):
+            raise TypeError("pending_reservation must be a bool")
 
 
 @dataclass(frozen=True, slots=True)

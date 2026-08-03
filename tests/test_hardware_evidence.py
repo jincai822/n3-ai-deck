@@ -14,7 +14,7 @@ from streamdock_n3.hardware.contracts import (
     Stage,
 )
 from streamdock_n3.hardware.evidence import EvidenceRecorder
-from tests.hardware_fixtures import TEST_COMMIT, make_manifest, make_profile
+from tests.hardware_fixtures import TEST_COMMIT, command_step, make_manifest, make_profile
 
 
 def _execute_stage(
@@ -22,7 +22,7 @@ def _execute_stage(
     stage: Stage,
     commands: tuple[AdapterCommand, ...],
 ) -> None:
-    adapter.begin_stage(make_manifest(stage, commands))
+    adapter.begin_stage(make_manifest(stage, tuple(command_step(command) for command in commands)))
     for command in commands:
         assert adapter.execute(command).status is ResultStatus.SUCCEEDED
     adapter.complete_stage(True)
@@ -55,7 +55,9 @@ def test_records_closed_g3_operation_and_stage_evidence() -> None:
     recorder = EvidenceRecorder()
     adapter = _g3_adapter(recorder)
 
-    assert adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS)).status is ResultStatus.SUCCEEDED
+    assert (
+        adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS)).status is ResultStatus.SUCCEEDED
+    )
     assert recorder.records[0].to_dict() == {
         "schema_version": 1,
         "kind": "operation",
@@ -95,7 +97,9 @@ def test_records_closed_g3_operation_and_stage_evidence() -> None:
 def test_image_evidence_is_redacted_deterministic_and_immutable() -> None:
     recorder = EvidenceRecorder()
     adapter = _g3_adapter(recorder)
-    assert adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS)).status is ResultStatus.SUCCEEDED
+    assert (
+        adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS)).status is ResultStatus.SUCCEEDED
+    )
     adapter.complete_stage(True)
     _execute_stage(adapter, Stage.G4_INITIALIZATION, (AdapterCommand(Operation.INITIALIZE),))
     _execute_stage(
@@ -118,7 +122,7 @@ def test_image_evidence_is_redacted_deterministic_and_immutable() -> None:
     )
     sensitive_image = b" ".join(markers)
     command = AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=sensitive_image)
-    adapter.begin_stage(make_manifest(Stage.G6_ONE_LCD, (command,)))
+    adapter.begin_stage(make_manifest(Stage.G6_ONE_LCD, (command_step(command),)))
     assert adapter.execute(command).status is ResultStatus.SUCCEEDED
 
     rendered = recorder.to_json()

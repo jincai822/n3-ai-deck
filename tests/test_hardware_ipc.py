@@ -20,7 +20,8 @@ from streamdock_n3.hardware.contracts import (
     MAX_IMAGE_BYTES,
     AdapterCommand,
     AdapterState,
-    CommandRule,
+    CommandSpec,
+    CommandStep,
     DeviceProfile,
     ErrorCode,
     InputAction,
@@ -65,22 +66,22 @@ def payload_limit_request() -> IpcRequest:
     profile = make_profile()
     image = b"x" * MAX_IMAGE_BYTES
     command = AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=image)
-    rules = [
-        CommandRule(
-            Operation.SET_KEY_IMAGE,
-            min_calls=1,
-            max_calls=1,
-            key=1,
-            image_sha256=command.image_digest(),
+    steps = [
+        CommandStep(
+            CommandSpec(
+                Operation.SET_KEY_IMAGE,
+                key=1,
+                image_sha256=command.image_digest(),
+            )
         )
     ]
-    rules.extend(
-        CommandRule(
-            Operation.SET_KEY_IMAGE,
-            min_calls=0,
-            max_calls=0,
-            key=(index % 6) + 1,
-            image_sha256=sha256(f"filler-{index}".encode()).hexdigest(),
+    steps.extend(
+        CommandStep(
+            CommandSpec(
+                Operation.SET_KEY_IMAGE,
+                key=(index % 6) + 1,
+                image_sha256=sha256(f"filler-{index}".encode()).hexdigest(),
+            )
         )
         for index in range(608)
     )
@@ -89,9 +90,9 @@ def payload_limit_request() -> IpcRequest:
         TEST_COMMIT,
         profile.digest(),
         TEST_INTERFACE,
-        tuple(rules),
+        tuple(steps),
         600_000,
-        "x" * 60,
+        "x" * 71,
         "x",
         "x",
     )
@@ -190,7 +191,7 @@ def test_request_uses_closed_canonical_schema() -> None:
         "commit",
         "profile_digest",
         "interface",
-        "allowed_commands",
+        "steps",
         "deadline_ms",
         "expected_result",
         "recovery_plan",
@@ -202,10 +203,9 @@ def test_request_uses_closed_canonical_schema() -> None:
         "subclass",
         "protocol",
     }
-    assert set(wire["manifest"]["allowed_commands"][0]) == {
+    assert set(wire["manifest"]["steps"][0]) == {"forward", "recovery"}
+    assert set(wire["manifest"]["steps"][0]["forward"]) == {
         "operation",
-        "min_calls",
-        "max_calls",
         "brightness",
         "key",
         "image_sha256",
@@ -234,8 +234,7 @@ def test_response_uses_closed_canonical_schema() -> None:
     assert set(wire) == {"schema_version", "status", "error_code", "duration_ms", "events"}
     assert wire["events"]
     assert all(
-        set(event) == {"kind", "control_id", "action", "monotonic_ns"}
-        for event in wire["events"]
+        set(event) == {"kind", "control_id", "action", "monotonic_ns"} for event in wire["events"]
     )
 
 
@@ -277,8 +276,8 @@ def _add(path: tuple[str | int, ...]) -> RequestMutation:
         _add(("manifest",)),
         _remove(("manifest", "interface"), "number"),
         _add(("manifest", "interface")),
-        _remove(("manifest", "allowed_commands", 0), "operation"),
-        _add(("manifest", "allowed_commands", 0)),
+        _remove(("manifest", "steps", 0, "forward"), "operation"),
+        _add(("manifest", "steps", 0, "forward")),
         _remove(("command",), "operation"),
         _add(("command",)),
     ),
@@ -369,7 +368,9 @@ def test_all_profile_enums_round_trip(
     assert decode_request(encode_request(request)) == request
 
 
-@pytest.mark.parametrize("stage", tuple(stage for stage in Stage if stage is not Stage.G0_SIMULATION))
+@pytest.mark.parametrize(
+    "stage", tuple(stage for stage in Stage if stage is not Stage.G0_SIMULATION)
+)
 def test_all_manifest_stages_round_trip(stage: Stage) -> None:
     request = valid_request()
     manifest = make_manifest(stage)
@@ -401,9 +402,12 @@ def test_all_operations_brightness_and_image_round_trip(command: AdapterCommand)
     assert decoded == request
     if command.image is not None:
         assert wire["command"]["image_base64"] == base64.b64encode(TEST_IMAGE).decode("ascii")
-        assert TEST_IMAGE not in encode_response(
-            OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)
-        ).encode()
+        assert (
+            TEST_IMAGE
+            not in encode_response(
+                OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)
+            ).encode()
+        )
 
 
 @pytest.mark.parametrize(
@@ -422,7 +426,9 @@ def test_all_result_statuses_round_trip(status: ResultStatus, error_code: ErrorC
     assert decode_response(encode_response(result)) == result
 
 
-@pytest.mark.parametrize("error_code", tuple(code for code in ErrorCode if code is not ErrorCode.NONE))
+@pytest.mark.parametrize(
+    "error_code", tuple(code for code in ErrorCode if code is not ErrorCode.NONE)
+)
 def test_all_non_success_error_codes_round_trip(error_code: ErrorCode) -> None:
     result = OperationResult(ResultStatus.REJECTED, error_code, duration_ms=1)
 
@@ -448,7 +454,7 @@ def test_all_normalized_events_round_trip() -> None:
         (("profile", "identity_status"), "trusted"),
         (("profile", "protocol_status"), "known"),
         (("manifest", "stage"), "g8_live"),
-        (("manifest", "allowed_commands", 0, "operation"), "open_device"),
+        (("manifest", "steps", 0, "forward", "operation"), "open_device"),
         (("command", "operation"), "open_device"),
     ),
 )
@@ -496,8 +502,6 @@ def test_response_rejects_unknown_versions_and_enums(
     "path",
     (
         ("schema_version",),
-        ("manifest", "allowed_commands", 0, "min_calls"),
-        ("manifest", "allowed_commands", 0, "max_calls"),
         ("manifest", "deadline_ms"),
     ),
 )
@@ -644,7 +648,9 @@ def test_fake_helper_call_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch)
 def test_fake_helper_maps_timeout_to_stable_result(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         del args, kwargs
-        raise subprocess.TimeoutExpired(["secret/path"], timeout=2, output="secret", stderr="secret")
+        raise subprocess.TimeoutExpired(
+            ["secret/path"], timeout=2, output="secret", stderr="secret"
+        )
 
     monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
 
@@ -720,7 +726,9 @@ def test_fake_helper_rejects_response_without_exactly_one_nonempty_json_line(
 
     def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         del kwargs
-        return subprocess.CompletedProcess(argv, 0, stdout=stdout_factory(response), stderr="secret")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=stdout_factory(response), stderr="secret"
+        )
 
     monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
 

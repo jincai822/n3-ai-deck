@@ -46,10 +46,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "83ab0484cbb4c2d295f4b38d0474819206ca3cb98e8d84c770e600e61db81e57"
+        "e391d36f42540034d26898183b2909057779b03f39e85be2c1c9574b4585d610"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "47f6a0dc27bb48b90fbfd66eabcc999164aa75afcc67280d95a6f1a2d5f979d2"
+        "860cdc42e0eefde301da5a3f36b3488ab8dbed2bf768a6d86ae07af608afe2d1"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
@@ -58,7 +58,7 @@ REVIEWED_SOURCE_SHA256 = {
         "816d5e368152b58ea872284314c52e138a580aa29a8e5a748ed3a4336bdd3788"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "b5a06f8e8c77c2c947dd62040f80e71f7d7acc7dcf628995d29a936edb0c4046"
+        "a6bfcaa92061099132ecc8a128b2711822c4c433bd3fff5ee935ca5feaae06f7"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
         "e96907fa4d2b257a1af2739b249d8a3fcc6764e5c29414cee154fdee3ca8fba0"
@@ -1335,6 +1335,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
 
     stage = contracts.Stage(contracts.Stage.G1_PROFILE.value)
     state = contracts.AdapterState(contracts.AdapterState.CANDIDATE.value)
+    stage_phase = contracts.StagePhase(contracts.StagePhase.FORWARD.value)
     operation = contracts.Operation(contracts.Operation.APPROVE_PROFILE.value)
     input_kind = contracts.InputKind(contracts.InputKind.BUTTON.value)
     input_action = contracts.InputAction(contracts.InputAction.PRESS.value)
@@ -1352,13 +1353,14 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         "0123456789abcdef",
     )
     command = contracts.AdapterCommand(operation)
-    rule = contracts.CommandRule(operation, 1, 1)
+    spec = contracts.CommandSpec(operation)
+    step = contracts.CommandStep(spec)
     manifest = contracts.StageManifest(
         stage,
         "0123456789abcdef",
         profile.digest(),
         interface,
-        (rule,),
+        (step,),
         5_000,
         "g1-validated",
         "g1-recovery",
@@ -1371,6 +1373,10 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     recorder = evidence.EvidenceRecorder()
     capability_gate = gate.CapabilityGate()
     stage_session = gate.StageSession(manifest, (0,))
+    capability_snapshot = contracts.CapabilitySnapshot(
+        state, None, None, None, 0, stage, stage_phase
+    )
+    session_snapshot = contracts.StageSessionSnapshot(stage, stage_phase, 0, 0, False)
     gate_violation = gate.GateViolation(contracts.ErrorCode.STATE_NOT_ALLOWED)
     n3_adapter = adapter.N3Adapter(profile, "0123456789abcdef", fake_backend, evidence=recorder)
     request = ipc.IpcRequest(profile, state, manifest, command)
@@ -1401,6 +1407,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         for value in (
             stage,
             state,
+            stage_phase,
             operation,
             input_kind,
             input_action,
@@ -1410,12 +1417,15 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             interface,
             profile,
             command,
-            rule,
+            spec,
+            step,
             manifest,
             event,
             result,
             gate_violation,
             stage_session,
+            capability_snapshot,
+            session_snapshot,
             capability_gate,
             backend_call,
             fake_backend,

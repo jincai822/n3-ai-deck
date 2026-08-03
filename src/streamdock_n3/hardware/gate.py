@@ -120,29 +120,39 @@ class CapabilityGate:
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
         if manifest.interface != profile.interface:
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
-        if any(rule.operation not in _STAGE_OPERATIONS[manifest.stage] for rule in manifest.allowed_commands):
+        specs = tuple(
+            spec
+            for step in manifest.steps
+            for spec in (
+                (step.forward,) if step.recovery is None else (step.forward, step.recovery)
+            )
+        )
+        if any(spec.operation not in _STAGE_OPERATIONS[manifest.stage] for spec in specs):
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
         required_operation = _REQUIRED_OPERATION[manifest.stage]
-        if not any(
-            rule.operation is required_operation and rule.min_calls >= 1
-            for rule in manifest.allowed_commands
-        ):
+        if not any(spec.operation is required_operation for spec in specs):
             raise GateViolation(ErrorCode.MANIFEST_INVALID)
         self._manifest = manifest
-        self._call_counts = [0] * len(manifest.allowed_commands)
+        self._call_counts = [0] * len(specs)
 
     def authorize(self, command: AdapterCommand) -> None:
         """Authorize one exact command against the first matching rule with capacity."""
         manifest, call_counts = self._require_session()
-        rules = manifest.allowed_commands
-        if not any(rule.operation is command.operation for rule in rules):
+        specs = tuple(
+            spec
+            for step in manifest.steps
+            for spec in (
+                (step.forward,) if step.recovery is None else (step.forward, step.recovery)
+            )
+        )
+        if not any(spec.operation is command.operation for spec in specs):
             raise GateViolation(ErrorCode.OPERATION_NOT_ALLOWED)
         exact_match_found = False
-        for index, rule in enumerate(rules):
-            if not rule.matches(command):
+        for index, spec in enumerate(specs):
+            if not spec.matches(command):
                 continue
             exact_match_found = True
-            if call_counts[index] < rule.max_calls:
+            if call_counts[index] < 1:
                 call_counts[index] += 1
                 return
         if exact_match_found:
@@ -167,10 +177,7 @@ class CapabilityGate:
             self._manifest = None
             self._call_counts = None
             return self._state
-        if any(
-            call_count < rule.min_calls
-            for call_count, rule in zip(call_counts, manifest.allowed_commands, strict=True)
-        ):
+        if any(call_count < 1 for call_count in call_counts):
             raise GateViolation(ErrorCode.REQUIRED_CALL_MISSING)
         expected_state, next_state = _TRANSITIONS[manifest.stage]
         if self._state is not expected_state:

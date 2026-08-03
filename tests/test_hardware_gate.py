@@ -18,7 +18,13 @@ from streamdock_n3.hardware.contracts import (
     StageManifest,
 )
 from streamdock_n3.hardware.gate import CapabilityGate, GateViolation, StageSession
-from tests.hardware_fixtures import TEST_COMMIT, TEST_IMAGE, make_manifest, make_profile
+from tests.hardware_fixtures import (
+    TEST_COMMIT,
+    TEST_IMAGE,
+    command_step,
+    make_manifest,
+    make_profile,
+)
 
 
 def make_gate(state: AdapterState) -> CapabilityGate:
@@ -51,8 +57,11 @@ def commands_for(stage: Stage) -> tuple[AdapterCommand, ...]:
     return commands[stage]
 
 
-def begin(gate: CapabilityGate, stage: Stage, commands: tuple[AdapterCommand, ...] | None = None) -> None:
-    gate.begin(make_profile(), make_manifest(stage, commands), TEST_COMMIT)
+def begin(
+    gate: CapabilityGate, stage: Stage, commands: tuple[AdapterCommand, ...] | None = None
+) -> None:
+    steps = None if commands is None else tuple(command_step(command) for command in commands)
+    gate.begin(make_profile(), make_manifest(stage, steps), TEST_COMMIT)
 
 
 def succeed(gate: CapabilityGate, command: AdapterCommand) -> None:
@@ -273,7 +282,9 @@ def test_session_exposes_an_immutable_call_count_snapshot() -> None:
         AdapterState.ONE_LCD_VALIDATED,
     ),
 )
-def test_disconnect_moves_nonterminal_gate_to_disconnected_and_clears_session(state: AdapterState) -> None:
+def test_disconnect_moves_nonterminal_gate_to_disconnected_and_clears_session(
+    state: AdapterState,
+) -> None:
     gate = make_gate(state)
 
     assert gate.disconnect() is AdapterState.DISCONNECTED
