@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import hashlib
 import importlib
 import json
 import re
@@ -26,6 +27,48 @@ G0_MODULES = (
     Path("src/streamdock_n3/hardware/helper_main.py"),
     Path("src/streamdock_n3/hardware/evidence.py"),
 )
+
+REVIEWED_SOURCE_PATHS = (
+    *G0_MODULES,
+    Path("src/streamdock_n3/_vendor/StreamDock/ProductIDs.py"),
+    Path("src/streamdock_n3/_data/99-streamdock.rules"),
+    Path("pyproject.toml"),
+)
+REVIEWED_SOURCE_SHA256 = {
+    Path("src/streamdock_n3/hardware/__init__.py"): (
+        "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
+    ),
+    Path("src/streamdock_n3/hardware/contracts.py"): (
+        "83ab0484cbb4c2d295f4b38d0474819206ca3cb98e8d84c770e600e61db81e57"
+    ),
+    Path("src/streamdock_n3/hardware/gate.py"): (
+        "e248c832867159c9ed24f76068bb729dac22e912a17131af8da8e2f2f6ba7826"
+    ),
+    Path("src/streamdock_n3/hardware/backend.py"): (
+        "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
+    ),
+    Path("src/streamdock_n3/hardware/adapter.py"): (
+        "6cd66a67cf7206eda20efebd0931121c2973f09c8426d2d54f9eb51ebca2fbc3"
+    ),
+    Path("src/streamdock_n3/hardware/ipc.py"): (
+        "b5a06f8e8c77c2c947dd62040f80e71f7d7acc7dcf628995d29a936edb0c4046"
+    ),
+    Path("src/streamdock_n3/hardware/helper_main.py"): (
+        "e96907fa4d2b257a1af2739b249d8a3fcc6764e5c29414cee154fdee3ca8fba0"
+    ),
+    Path("src/streamdock_n3/hardware/evidence.py"): (
+        "5d9484d50a2f66b859dda802f35a6a82385e11f39949d92ec8125600230619d4"
+    ),
+    Path("src/streamdock_n3/_vendor/StreamDock/ProductIDs.py"): (
+        "f367c2db9d884cbe01a14f1eb8fd992c84d23342607260e3981573b27e6dce3f"
+    ),
+    Path("src/streamdock_n3/_data/99-streamdock.rules"): (
+        "7a53ba40c632e712d390f00b4d42d4b6aab32a33c8e130b3e16735a735ad33fd"
+    ),
+    Path("pyproject.toml"): (
+        "86d5dc96a447edf22bc0d82079722c4078e0aa9c01d771d30e12cbcc41b20102"
+    ),
+}
 
 FORBIDDEN_SOURCE = (
     "streamdock_n3._vendor",
@@ -99,6 +142,30 @@ DYNAMIC_RESOLUTION_CALLS = {
     "setattr",
     "vars",
 }
+MUTATING_METHODS = {
+    "__iadd__",
+    "__imul__",
+    "__ior__",
+    "__delitem__",
+    "__setitem__",
+    "add",
+    "append",
+    "clear",
+    "difference_update",
+    "discard",
+    "extend",
+    "insert",
+    "intersection_update",
+    "pop",
+    "popitem",
+    "remove",
+    "reverse",
+    "setdefault",
+    "sort",
+    "symmetric_difference_update",
+    "update",
+}
+PROTECTED_SYMBOLS = {"HELPER_MODULE", "subprocess", "sys"}
 
 
 def _source(path: Path) -> str:
@@ -146,7 +213,8 @@ def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> tuple[str,
         candidate = ".".join(filter(None, (base, alias.name)))
         targets.append(
             base
-            if base in ALLOWED_STDLIB_IMPORTS or _project_import_allowed(base)
+            if base != "streamdock_n3.hardware"
+            and (base in ALLOWED_STDLIB_IMPORTS or _project_import_allowed(base))
             else candidate
         )
     return tuple(targets)
@@ -219,6 +287,68 @@ def _canonical_calls(path: Path, tree: ast.Module) -> list[tuple[ast.Call, set[s
     ]
 
 
+def _contains_protected_symbol(
+    expression: ast.AST,
+    bindings: dict[str, set[str]],
+    symbols: set[str] = PROTECTED_SYMBOLS,
+) -> bool:
+    for node in ast.walk(expression):
+        if isinstance(node, ast.Name) and node.id in symbols:
+            return True
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            canonical_names = _canonical_names(node, bindings)
+            if any(
+                canonical == symbol or canonical.startswith(symbol + ".")
+                for canonical in canonical_names
+                for symbol in symbols
+            ):
+                return True
+    return False
+
+
+def _contains_uncalled_dangerous_reference(
+    expression: ast.expr,
+    bindings: dict[str, set[str]],
+) -> bool:
+    if isinstance(expression, ast.Call):
+        return False
+    if isinstance(expression, (ast.Name, ast.Attribute)):
+        lexical_name = expression.id if isinstance(expression, ast.Name) else expression.attr
+        canonical_names = _canonical_names(expression, bindings)
+        return (
+            lexical_name in DYNAMIC_RESOLUTION_CALLS
+            or lexical_name == "import_module"
+            or lexical_name in FORBIDDEN_FILE_METHODS
+            or lexical_name in PROTECTED_SYMBOLS
+            or any(
+                canonical == "builtins.open"
+                or canonical == "os.open"
+                or canonical == "sys"
+                or canonical.startswith("sys.")
+                or canonical == "subprocess"
+                or canonical.startswith("subprocess.")
+                for canonical in canonical_names
+            )
+        )
+    return any(
+        _contains_uncalled_dangerous_reference(child, bindings)
+        for child in ast.iter_child_nodes(expression)
+        if isinstance(child, ast.expr)
+    )
+
+
+def _allowed_helper_definition(tree: ast.Module, node: ast.AST, target: ast.expr) -> bool:
+    return (
+        node in tree.body
+        and isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and target is node.targets[0]
+        and isinstance(target, ast.Name)
+        and target.id == "HELPER_MODULE"
+        and _literal(node.value, "streamdock_n3.hardware.helper_main")
+    )
+
+
 def _call_violations(path: Path, tree: ast.Module) -> list[str]:
     violations: list[str] = []
     bindings = _canonical_import_bindings(path, tree)
@@ -235,25 +365,25 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 violations.append(
                     f"{path}:{node.lineno}: imported binding scope mutation {sorted(mutated)[0]}"
                 )
-        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and isinstance(
-            node.value, (ast.Name, ast.Attribute)
+        elif (
+            isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
+            and node.value is not None
+            and _contains_uncalled_dangerous_reference(node.value, bindings)
         ):
-            value = node.value
-            canonical_values = _canonical_names(value, bindings)
-            if (
-                isinstance(value, ast.Name)
-                and value.id in DYNAMIC_RESOLUTION_CALLS
-                or isinstance(value, ast.Attribute)
-                and value.attr == "import_module"
-                or any(
-                    name == "builtins.open"
-                    or name == "os.open"
-                    or name == "subprocess"
-                    or name.startswith("subprocess.")
-                    for name in canonical_values
-                )
+            violations.append(f"{path}:{node.lineno}: dangerous assignment alias")
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            targets = [node.target]
+        elif isinstance(node, ast.Delete):
+            targets = node.targets
+        else:
+            targets = []
+        for target in targets:
+            if _contains_protected_symbol(target, bindings) and not _allowed_helper_definition(
+                tree, node, target
             ):
-                violations.append(f"{path}:{node.lineno}: dangerous assignment alias")
+                violations.append(f"{path}:{node.lineno}: protected symbol mutation")
     for call, canonical_names in _canonical_calls(path, tree):
         function = call.func
         lexical_name = function.id if isinstance(function, ast.Name) else ""
@@ -272,6 +402,12 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 violations.append(
                     f"{path}:{call.lineno}: file function {sorted(file_functions)[0]}"
                 )
+        if (
+            isinstance(function, ast.Attribute)
+            and function.attr in MUTATING_METHODS
+            and _contains_protected_symbol(function.value, bindings)
+        ):
+            violations.append(f"{path}:{call.lineno}: protected object mutation")
         subprocess_functions = {name for name in canonical_names if name.startswith("subprocess.")}
         if subprocess_functions and (
             subprocess_functions != {"subprocess.run"} or path.name != "ipc.py"
@@ -332,10 +468,21 @@ def _symbol_is_immutable(
             or (isinstance(node, ast.arg) and node.arg == symbol)
             or (isinstance(node, (ast.Global, ast.Nonlocal)) and symbol in node.names)
             or (
-                isinstance(node, ast.Attribute)
+                isinstance(node, (ast.Attribute, ast.Subscript))
                 and isinstance(node.ctx, (ast.Store, ast.Del))
-                and isinstance(node.value, ast.Name)
-                and node.value.id == symbol
+                and any(
+                    isinstance(child, ast.Name) and child.id == symbol
+                    for child in ast.walk(node)
+                )
+            )
+            or (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in MUTATING_METHODS
+                and any(
+                    isinstance(child, ast.Name) and child.id == symbol
+                    for child in ast.walk(node.func.value)
+                )
             )
         ):
             return False
@@ -349,6 +496,113 @@ def _bounded_timeout(value: ast.expr | None) -> bool:
         and isinstance(value.left, ast.Name)
         and value.left.id == "timeout_ms"
         and _literal(value.right, 1000)
+    )
+
+
+def _enclosing_function(tree: ast.Module, target: ast.AST) -> ast.FunctionDef | None:
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    parent = parents.get(target)
+    while parent is not None:
+        if isinstance(parent, ast.FunctionDef):
+            return parent
+        parent = parents.get(parent)
+    return None
+
+
+def _timeout_parameter_is_immutable(function: ast.FunctionDef) -> bool:
+    positional = (*function.args.posonlyargs, *function.args.args)
+    timeout_arguments = [argument for argument in positional if argument.arg == "timeout_ms"]
+    if len(timeout_arguments) != 1:
+        return False
+    if any(
+        argument.arg == "timeout_ms"
+        for argument in (*function.args.kwonlyargs,)
+    ) or (function.args.vararg is not None and function.args.vararg.arg == "timeout_ms") or (
+        function.args.kwarg is not None and function.args.kwarg.arg == "timeout_ms"
+    ):
+        return False
+    for node in ast.walk(function):
+        if isinstance(node, ast.Name) and node.id == "timeout_ms" and isinstance(
+            node.ctx, (ast.Store, ast.Del)
+        ):
+            return False
+        if (
+            isinstance(node, ast.arg)
+            and node is not timeout_arguments[0]
+            and node.arg == "timeout_ms"
+        ):
+            return False
+        if isinstance(node, (ast.Global, ast.Nonlocal)) and "timeout_ms" in node.names:
+            return False
+        if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(
+            node.ctx, (ast.Store, ast.Del)
+        ) and any(
+            isinstance(child, ast.Name) and child.id == "timeout_ms" for child in ast.walk(node)
+        ):
+            return False
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in MUTATING_METHODS
+            and any(
+                isinstance(child, ast.Name) and child.id == "timeout_ms"
+                for child in ast.walk(node.func.value)
+            )
+        ):
+            return False
+    return True
+
+
+def _has_exact_timeout_guard(function: ast.FunctionDef, call: ast.Call) -> bool:
+    expected_test = ast.parse(
+        "isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) "
+        "or not 1 <= timeout_ms <= request.manifest.deadline_ms <= MAX_DEADLINE_MS",
+        mode="eval",
+    ).body
+    for statement in function.body:
+        if not isinstance(statement, ast.If) or statement.lineno >= call.lineno:
+            continue
+        if ast.dump(statement.test) != ast.dump(expected_test) or len(statement.body) != 1:
+            continue
+        raised = statement.body[0]
+        if (
+            isinstance(raised, ast.Raise)
+            and isinstance(raised.exc, ast.Call)
+            and isinstance(raised.exc.func, ast.Name)
+            and raised.exc.func.id == "ValueError"
+            and len(raised.exc.args) == 1
+            and _literal(raised.exc.args[0], "invalid_timeout")
+            and not raised.exc.keywords
+        ):
+            return True
+    return False
+
+
+def _max_deadline_is_fixed(trees: Sequence[tuple[Path, ast.Module]]) -> bool:
+    definitions: list[tuple[ast.Module, ast.Name, ast.expr]] = []
+    for _path, tree in trees:
+        for statement in tree.body:
+            if (
+                isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == "MAX_DEADLINE_MS"
+            ):
+                definitions.append((tree, statement.targets[0], statement.value))
+    if len(definitions) != 1 or not _literal(definitions[0][2], 600_000):
+        return False
+    definition_tree, definition_store, _value = definitions[0]
+    return all(
+        _symbol_is_immutable(
+            tree,
+            "MAX_DEADLINE_MS",
+            allowed_store=definition_store if tree is definition_tree else None,
+        )
+        for _path, tree in trees
     )
 
 
@@ -422,6 +676,15 @@ def _fixed_helper_violations(trees: Sequence[tuple[Path, ast.Module]]) -> list[s
             violations.append(f"{path}:{call.lineno}: invalid subprocess {name}")
     if not _bounded_timeout(_keyword(call, "timeout")):
         violations.append(f"{path}:{call.lineno}: subprocess timeout must be timeout_ms / 1000")
+    function = _enclosing_function(tree, call)
+    if (
+        function is None
+        or function.name != "run_fake_helper"
+        or not _timeout_parameter_is_immutable(function)
+        or not _has_exact_timeout_guard(function, call)
+        or not _max_deadline_is_fixed(trees)
+    ):
+        violations.append(f"{path}:{call.lineno}: timeout bound is not statically immutable")
     if _keyword(call, "shell") is not None:
         violations.append(f"{path}:{call.lineno}: subprocess shell is forbidden")
     return violations
@@ -536,20 +799,6 @@ def _target_uses_alias(target: ast.expr, aliases: set[str]) -> bool:
 def _candidate_product_mapping_violations(source: str) -> list[int]:
     tree = ast.parse(source, filename="ProductIDs.py")
     bindings = _simple_bindings(tree)
-    aliases = {"g_products"}
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if isinstance(node.value, ast.Name) and node.value.id in aliases:
-                for target in targets:
-                    if isinstance(target, ast.Name) and target.id not in aliases:
-                        aliases.add(target.id)
-                        changed = True
-
     violations: list[int] = []
 
     def check_entry(entry: ast.expr, lineno: int) -> None:
@@ -565,62 +814,53 @@ def _candidate_product_mapping_violations(source: str) -> list[int]:
         for entry in entries:
             check_entry(entry, getattr(entry, "lineno", lineno))
 
+    initializers: list[tuple[ast.Name, ast.expr, int]] = []
+    for statement in tree.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "g_products"
+        ):
+            initializers.append((statement.targets[0], statement.value, statement.lineno))
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.target.id == "g_products"
+            and statement.value is not None
+        ):
+            initializers.append((statement.target, statement.value, statement.lineno))
+
+    if len(initializers) != 1:
+        occurrences = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and node.id == "g_products"
+        ]
+        return sorted(set(occurrences or [1]))
+
+    allowed_store, initial_value, initial_lineno = initializers[0]
+    check_collection(initial_value, initial_lineno)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            value = node.value
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if value is None:
-                if any(_target_uses_alias(target, aliases) for target in targets):
-                    violations.append(node.lineno)
+        if (
+            isinstance(node, ast.Name)
+            and node.id == "g_products"
+            and node is not allowed_store
+            or isinstance(node, (ast.AugAssign, ast.Delete, ast.NamedExpr, ast.Call))
+        ):
+            violations.append(node.lineno)
+        elif isinstance(node, ast.Assign):
+            if node in tree.body and node.targets == [allowed_store]:
                 continue
-            if (
-                isinstance(value, ast.Attribute)
-                and isinstance(value.value, ast.Name)
-                and value.value.id in aliases
-            ):
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
                 violations.append(node.lineno)
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id == "g_products":
-                    check_collection(value, node.lineno)
-                elif isinstance(target, ast.Name) and target.id in aliases:
-                    if not (isinstance(value, ast.Name) and value.id in aliases):
-                        violations.append(node.lineno)
-                elif _target_uses_alias(target, aliases):
-                    violations.append(node.lineno)
-        elif isinstance(node, ast.AugAssign) and _target_uses_alias(node.target, aliases):
-            if isinstance(node.op, ast.Add):
-                check_collection(node.value, node.lineno)
-            else:
-                violations.append(node.lineno)
-        elif isinstance(node, ast.Delete):
-            if any(_target_uses_alias(target, aliases) for target in node.targets):
-                violations.append(node.lineno)
-        elif isinstance(node, ast.Call):
-            if (
-                isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in aliases
-            ):
-                if node.keywords:
-                    violations.append(node.lineno)
-                elif node.func.attr == "append" and len(node.args) == 1:
-                    check_entry(node.args[0], node.lineno)
-                elif node.func.attr == "extend" and len(node.args) == 1:
-                    check_collection(node.args[0], node.lineno)
-                elif node.func.attr == "insert" and len(node.args) == 2:
-                    check_entry(node.args[1], node.lineno)
-                else:
-                    violations.append(node.lineno)
-            elif any(
-                isinstance(argument, ast.Name) and argument.id in aliases
-                for argument in (*node.args, *(keyword.value for keyword in node.keywords))
-            ):
-                violations.append(node.lineno)
+        elif isinstance(node, ast.AnnAssign) and not isinstance(node.target, ast.Name):
+            violations.append(node.lineno)
     return sorted(set(violations))
 
 
 UDEV_VENDOR_MATCH = re.compile(
-    r"(?:ATTR|ATTRS)\s*\{\s*idVendor\s*\}\s*==\s*([\"'])(.*?)\1",
+    r"(?:ATTR|ATTRS)\s*\{\s*idVendor\s*\}\s*==\s*",
     re.IGNORECASE,
 )
 
@@ -644,15 +884,109 @@ def _logical_udev_lines(source: str) -> Iterator[tuple[int, str]]:
         yield start, "".join(parts)
 
 
+def _c_unescape(value: str) -> str | None:
+    simple = {
+        "a": "\a",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "v": "\v",
+        "\\": "\\",
+        "'": "'",
+        '"': '"',
+        "?": "?",
+    }
+    decoded: list[str] = []
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character != "\\":
+            decoded.append(character)
+            index += 1
+            continue
+        index += 1
+        if index >= len(value):
+            return None
+        escape = value[index]
+        if escape in simple:
+            decoded.append(simple[escape])
+            index += 1
+        elif escape == "x":
+            digits = value[index + 1 : index + 3]
+            if len(digits) != 2 or any(digit not in "0123456789abcdefABCDEF" for digit in digits):
+                return None
+            decoded.append(chr(int(digits, 16)))
+            index += 3
+        elif escape in "01234567":
+            end = index + 1
+            while end < min(index + 3, len(value)) and value[end] in "01234567":
+                end += 1
+            decoded.append(chr(int(value[index:end], 8)))
+            index = end
+        else:
+            return None
+    return "".join(decoded)
+
+
+def _udev_match_value(line: str, start: int) -> tuple[str, bool] | None:
+    prefix = ""
+    if start < len(line) - 1 and line[start] in "eEiI" and line[start + 1] in "\"'":
+        prefix = line[start].lower()
+        start += 1
+    if start >= len(line) or line[start] not in "\"'":
+        return None
+    quote = line[start]
+    index = start + 1
+    content: list[str] = []
+    while index < len(line):
+        character = line[index]
+        if character == quote:
+            raw = "".join(content)
+            if prefix == "e":
+                decoded = _c_unescape(raw)
+                return None if decoded is None else (decoded, False)
+            return raw, prefix == "i"
+        if character == "\\":
+            if index + 1 >= len(line):
+                return None
+            content.extend((character, line[index + 1]))
+            index += 2
+        else:
+            content.append(character)
+            index += 1
+    return None
+
+
 def _candidate_udev_rule_violations(source: str) -> list[int]:
     violations: list[int] = []
     for lineno, line in _logical_udev_lines(source):
         for match in UDEV_VENDOR_MATCH.finditer(line):
-            alternatives = match.group(2).lower().split("|")
-            if any(fnmatch.fnmatchcase("6602", pattern) for pattern in alternatives):
+            parsed = _udev_match_value(line, match.end())
+            if parsed is None:
+                violations.append(lineno)
+                break
+            value, case_insensitive = parsed
+            candidate = "6602"
+            if case_insensitive:
+                value = value.lower()
+                candidate = candidate.lower()
+            alternatives = value.split("|")
+            if any(fnmatch.fnmatchcase(candidate, pattern) for pattern in alternatives):
                 violations.append(lineno)
                 break
     return violations
+
+
+def _reviewed_source_snapshot_violations(sources: dict[Path, bytes]) -> list[Path]:
+    violations = [
+        path
+        for path in REVIEWED_SOURCE_PATHS
+        if path not in sources
+        or hashlib.sha256(sources[path]).hexdigest() != REVIEWED_SOURCE_SHA256[path]
+    ]
+    return [*violations, *sorted(set(sources) - set(REVIEWED_SOURCE_PATHS))]
 
 
 def _forbidden_runtime_modules(names: Sequence[str]) -> list[str]:
@@ -1186,12 +1520,19 @@ def _direct_helper_tree(*, prelude: str = "", timeout: str = "timeout_ms / 1000"
         f'''\
 import subprocess
 import sys
+MAX_DEADLINE_MS = 600_000
 HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 {prelude}
-def invoke(payload, timeout_ms):
+def run_fake_helper(request, timeout_ms):
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or not 1 <= timeout_ms <= request.manifest.deadline_ms <= MAX_DEADLINE_MS
+    ):
+        raise ValueError("invalid_timeout")
     return subprocess.run(
         [sys.executable, "-m", HELPER_MODULE],
-        input=payload, capture_output=True, text=True, encoding="utf-8",
+        input="{{}}", capture_output=True, text=True, encoding="utf-8",
         errors="strict", check=False, timeout={timeout})
 ''',
         filename="src/streamdock_n3/hardware/ipc.py",
@@ -1299,3 +1640,141 @@ ATTR{idVendor}=="6602", ENV{NOTE}="# candidate"
 '''
 
     assert _candidate_udev_rule_violations(source) == [3]
+
+
+@pytest.mark.parametrize(
+    ("source", "allowed"),
+    (
+        ("from streamdock_n3.hardware import definitely_unsafe\n", False),
+        ("from streamdock_n3.hardware import contracts\n", True),
+        ("from streamdock_n3.hardware.contracts import definitely_unsafe\n", True),
+    ),
+)
+def test_import_gate_resolves_parent_package_symbols_to_complete_candidates(
+    source: str,
+    allowed: bool,
+) -> None:
+    path = Path("src/streamdock_n3/hardware/backend.py")
+
+    assert (_import_violations(path, ast.parse(source, filename=str(path))) == []) is allowed
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "(loader,) = (__import__,)\n",
+        "from subprocess import Popen\n(launch,) = (Popen,)\n",
+        "boxed = [open]\n",
+        "from pathlib import Path\n(boxed,) = (Path.read_text,)\n",
+        "if (boxed := (__import__,)):\n    pass\n",
+    ),
+)
+def test_call_gate_rejects_dangerous_references_in_binding_patterns_and_containers(
+    source: str,
+) -> None:
+    path = Path("src/streamdock_n3/hardware/backend.py")
+
+    assert _call_violations(path, ast.parse(source, filename=str(path))) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import sys\nsys.modules[__name__].HELPER_MODULE = 'unsafe.module'\n",
+        "import subprocess\nsubprocess.__dict__['run'] = lambda *args: None\n",
+        "import sys\ndel sys.modules[__name__].HELPER_MODULE\n",
+        "import subprocess\nsubprocess.__dict__.update({'run': lambda: None})\n",
+        (
+            "import sys\nmodule = sys.modules[__name__]\n"
+            "module.HELPER_MODULE = 'unsafe.module'\n"
+        ),
+    ),
+)
+def test_call_gate_rejects_indirect_writes_through_protected_roots(source: str) -> None:
+    path = Path("src/streamdock_n3/hardware/ipc.py")
+
+    assert _call_violations(path, ast.parse(source, filename=str(path))) != []
+
+
+def test_fixed_helper_gate_rejects_indirect_helper_module_mutation() -> None:
+    path = Path("src/streamdock_n3/hardware/ipc.py")
+    tree = _direct_helper_tree(
+        prelude="sys.modules[__name__].HELPER_MODULE = 'unsafe.module'"
+    )
+
+    assert _fixed_helper_violations(((path, tree),)) != []
+
+
+def test_fixed_helper_gate_rejects_timeout_parameter_rebinding_to_a_huge_value() -> None:
+    path = Path("src/streamdock_n3/hardware/ipc.py")
+    tree = ast.parse(
+        '''\
+import subprocess
+import sys
+MAX_DEADLINE_MS = 600_000
+HELPER_MODULE = "streamdock_n3.hardware.helper_main"
+def run_fake_helper(request, timeout_ms):
+    if (
+        isinstance(timeout_ms, bool)
+        or not isinstance(timeout_ms, int)
+        or not 1 <= timeout_ms <= request.manifest.deadline_ms <= MAX_DEADLINE_MS
+    ):
+        raise ValueError("invalid_timeout")
+    timeout_ms = 10**100
+    return subprocess.run(
+        [sys.executable, "-m", HELPER_MODULE],
+        input="{}", capture_output=True, text=True, encoding="utf-8",
+        errors="strict", check=False, timeout=timeout_ms / 1000)
+''',
+        filename=str(path),
+    )
+
+    assert _fixed_helper_violations(((path, tree),)) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        (
+            "g_products = []\n(products,) = (g_products,)\n"
+            "products.append((0x6602, 0x1000, Device))\n"
+        ),
+        (
+            "g_products = []\n"
+            "(products := g_products).append((0x6602, 0x1000, Device))\n"
+        ),
+        (
+            "g_products = []\n(writer,) = (g_products.append,)\n"
+            "writer((0x6602, 0x1000, Device))\n"
+        ),
+        "g_products = []\ng_products[0][0] = 0x6602\n",
+        "g_products = []\nglobals()['g_products'].append((0x6602, 0x1000, Device))\n",
+    ),
+)
+def test_candidate_mapping_gate_rejects_indirect_aliases_and_nested_writers(
+    source: str,
+) -> None:
+    assert _candidate_product_mapping_violations(source) != []
+
+
+@pytest.mark.parametrize(
+    "rule",
+    (
+        'ATTR{idVendor}==e"6602", TAG+="uaccess"\n',
+        'ATTR{idVendor}==e"\\x36\\x36\\x30\\x32", TAG+="uaccess"\n',
+        'ATTRS{idVendor}==i"6602", TAG+="uaccess"\n',
+        'ATTR{idVendor}==e"\\xZZ", TAG+="uaccess"\n',
+    ),
+)
+def test_udev_gate_rejects_prefixed_escaped_or_unparseable_candidate_values(rule: str) -> None:
+    assert _candidate_udev_rule_violations(rule) != []
+
+
+@pytest.mark.parametrize("path", REVIEWED_SOURCE_PATHS)
+def test_reviewed_source_snapshot_gate_rejects_any_covered_byte_mutation(path: Path) -> None:
+    sources = {path: (ROOT / path).read_bytes() for path in REVIEWED_SOURCE_PATHS}
+    assert _reviewed_source_snapshot_violations(sources) == []
+
+    sources[path] += b"\n# unreviewed mutation\n"
+
+    assert _reviewed_source_snapshot_violations(sources) == [path]
