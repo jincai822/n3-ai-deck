@@ -654,6 +654,21 @@ def test_fake_helper_maps_timeout_to_stable_result(monkeypatch: pytest.MonkeyPat
     assert "secret" not in repr(result)
 
 
+def test_fake_helper_redacts_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    sensitive_text = "credential=" + "private /" + "home/alice/helper"
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del args, kwargs
+        raise subprocess.SubprocessError(sensitive_text)
+
+    monkeypatch.setattr("streamdock_n3.hardware.ipc.subprocess.run", fake_run)
+
+    result = run_fake_helper(valid_request(), timeout_ms=2_000)
+
+    assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.HELPER_CRASHED, 0)
+    assert sensitive_text not in repr(result)
+
+
 def test_fake_helper_redacts_nonzero_child_output(monkeypatch: pytest.MonkeyPatch) -> None:
     secret = "token=private /" + "home/alice/device stderr-secret"
 

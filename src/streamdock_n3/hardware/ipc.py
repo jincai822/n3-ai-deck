@@ -399,6 +399,8 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
         )
     except subprocess.TimeoutExpired:
         return _runner_failure(ResultStatus.TIMEOUT, ErrorCode.DEADLINE_EXCEEDED, timeout_ms)
+    except subprocess.SubprocessError:
+        return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.HELPER_CRASHED)
     except UnicodeError:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     except OSError:
