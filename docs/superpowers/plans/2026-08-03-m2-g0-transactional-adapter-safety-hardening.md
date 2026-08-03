@@ -1613,8 +1613,16 @@ git commit -m "fix: isolate transactional fake helper policy"
 
 ### Task 6: Safety Closure, Public Truth, and Regression Completion
 
+> **Approved scope-record amendment (2026-08-03):** Before Task 6 implementation was
+> dispatched, the primary agent explicitly authorized closing one Task 1 Minor review debt in
+> this task: direct test-only regression coverage for an empty `StageManifest.steps` tuple, a
+> non-tuple list, and a tuple containing a non-`CommandStep`. This amendment records that prior
+> authorization in the durable plan. It does not expand product behavior and must not modify the
+> already-correct production contract implementation.
+
 **Files:**
 - Modify: `tests/test_hardware_g0_safety.py`
+- Modify: `tests/test_hardware_contracts.py` (approved test-only Task 1 review-debt coverage)
 - Modify: `tests/test_public_project.py`
 - Modify: `docs/ARCHITECTURE.md`
 - Modify: `ROADMAP.md`
@@ -1622,6 +1630,21 @@ git commit -m "fix: isolate transactional fake helper policy"
 **Interfaces:**
 - Consumes: the reviewed final bytes and public behavior from Tasks 1–5.
 - Produces: closed source/wheel review digests and truthful documentation of the transactional G0 foundation.
+
+- [ ] **Step 0: Complete the approved Task 1 Minor regression coverage**
+
+Add three direct `StageManifest` contract tests to `tests/test_hardware_contracts.py` that reject:
+
+- an empty `steps=()` tuple;
+- a non-tuple `steps` list;
+- a tuple containing a non-`CommandStep` value.
+
+These tests cover validation already implemented in `StageManifest.__post_init__`. Do not modify
+production code for this review debt and do not treat it as new product behavior.
+
+Run: `uv run pytest tests/test_hardware_contracts.py -q`
+
+Expected: all contract tests pass using the existing production validation.
 
 - [ ] **Step 1: Run the complete test suite before updating reviewed hashes**
 
@@ -1704,7 +1727,7 @@ Expected: success with no issues in all eight G0 source files.
 - [ ] **Step 9: Commit Task 6**
 
 ```bash
-git add tests/test_hardware_g0_safety.py tests/test_public_project.py docs/ARCHITECTURE.md ROADMAP.md
+git add tests/test_hardware_g0_safety.py tests/test_hardware_contracts.py tests/test_public_project.py docs/ARCHITECTURE.md ROADMAP.md
 git commit -m "docs: publish transactional G0 safety boundary"
 ```
 
