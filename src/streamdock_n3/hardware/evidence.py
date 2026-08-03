@@ -1,10 +1,11 @@
-"""Closed, in-memory evidence records for hardware validation stages."""
+"""Transactional, deterministic, redacted evidence for adapter activity."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Protocol
 
 from streamdock_n3.hardware.contracts import (
     SCHEMA_VERSION,
@@ -22,19 +23,23 @@ from streamdock_n3.hardware.contracts import (
 )
 
 
-class EvidenceKind(StrEnum):
-    """The two closed evidence record categories."""
+class EvidenceDisposition(StrEnum):
+    ATTEMPT = "attempt"
+    COMMITTED = "committed"
+    FAILED = "failed"
 
+
+class EvidenceKind(StrEnum):
     OPERATION = "operation"
     STAGE = "stage"
 
 
 @dataclass(frozen=True, slots=True)
 class EvidenceRecord:
-    """A safe, fixed-shape snapshot of one operation or completed stage."""
-
     schema_version: int
     kind: EvidenceKind
+    disposition: EvidenceDisposition
+    epoch: int
     stage: Stage
     commit: str
     profile_digest: str
@@ -53,11 +58,64 @@ class EvidenceRecord:
     adapter_state: AdapterState | None
     recovery_status: RecoveryStatus | None
 
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or self.schema_version != SCHEMA_VERSION
+        ):
+            raise ValueError("invalid schema version")
+        if not isinstance(self.kind, EvidenceKind):
+            raise TypeError("kind must be an EvidenceKind")
+        if not isinstance(self.disposition, EvidenceDisposition):
+            raise TypeError("disposition must be an EvidenceDisposition")
+        for value, field in (
+            (self.epoch, "epoch"),
+            (self.payload_size, "payload_size"),
+            (self.duration_ms, "duration_ms"),
+            (self.event_count, "event_count"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+        if not isinstance(self.stage, Stage):
+            raise TypeError("stage must be a Stage")
+        if not isinstance(self.interface, HidInterface):
+            raise TypeError("interface must be a HidInterface")
+        if self.kind is EvidenceKind.OPERATION:
+            if not isinstance(self.operation, Operation):
+                raise TypeError("operation evidence requires an Operation")
+            if not isinstance(self.status, ResultStatus):
+                raise TypeError("operation evidence requires a ResultStatus")
+            if not isinstance(self.error_code, ErrorCode):
+                raise TypeError("operation evidence requires an ErrorCode")
+            if self.adapter_state is not None or self.recovery_status is not None:
+                raise ValueError("operation evidence cannot include stage outcome")
+        else:
+            if any(
+                value is not None
+                for value in (
+                    self.operation,
+                    self.brightness,
+                    self.key,
+                    self.status,
+                )
+            ):
+                raise ValueError("stage evidence cannot include operation outcome")
+            if self.payload_size or self.duration_ms or self.event_count:
+                raise ValueError("stage evidence counters must be zero")
+            if not isinstance(self.adapter_state, AdapterState):
+                raise TypeError("stage evidence requires an AdapterState")
+            if not isinstance(self.recovery_status, RecoveryStatus):
+                raise TypeError("stage evidence requires a RecoveryStatus")
+            if self.error_code is not None and not isinstance(self.error_code, ErrorCode):
+                raise TypeError("error_code must be an ErrorCode or None")
+
     def to_dict(self) -> dict[str, object]:
-        """Return a fresh public dictionary containing only the closed schema."""
         return {
             "schema_version": self.schema_version,
             "kind": self.kind.value,
+            "disposition": self.disposition.value,
+            "epoch": self.epoch,
             "stage": self.stage.value,
             "commit": self.commit,
             "profile_digest": self.profile_digest,
@@ -74,90 +132,139 @@ class EvidenceRecord:
             "recovery_plan": self.recovery_plan,
             "approval_reference": self.approval_reference,
             "adapter_state": self.adapter_state.value if self.adapter_state is not None else None,
-            "recovery_status": self.recovery_status.value if self.recovery_status is not None else None,
+            "recovery_status": (
+                self.recovery_status.value if self.recovery_status is not None else None
+            ),
         }
 
 
-class EvidenceRecorder:
-    """Accumulate deterministic redacted evidence in process memory only."""
+class EvidenceSink(Protocol):
+    def record(self, record: EvidenceRecord) -> None:
+        raise NotImplementedError
 
+
+@dataclass(frozen=True, slots=True)
+class _EvidenceToken:
+    index: int
+    epoch: int
+    kind: EvidenceKind
+
+
+class EvidenceRecorder:
     def __init__(self) -> None:
         self._records: list[EvidenceRecord] = []
 
     @property
     def records(self) -> tuple[EvidenceRecord, ...]:
-        """Return records in append order without exposing the backing list."""
         return tuple(self._records)
 
-    def record_operation(
-        self,
-        profile: DeviceProfile,
-        manifest: StageManifest,
-        command: AdapterCommand,
-        result: OperationResult,
-    ) -> None:
-        """Append one operation record without retaining image data or digests."""
-        self._records.append(
-            EvidenceRecord(
-                schema_version=SCHEMA_VERSION,
-                kind=EvidenceKind.OPERATION,
-                stage=manifest.stage,
-                commit=manifest.commit,
-                profile_digest=profile.digest(),
-                interface=manifest.interface,
-                operation=command.operation,
-                brightness=command.brightness,
-                key=command.key,
-                payload_size=len(command.image) if command.image is not None else 0,
-                status=result.status,
-                error_code=result.error_code,
-                duration_ms=result.duration_ms,
-                event_count=len(result.events),
-                expected_result=manifest.expected_result,
-                recovery_plan=manifest.recovery_plan,
-                approval_reference=manifest.approval_reference,
-                adapter_state=None,
-                recovery_status=None,
-            )
+    def begin(self, record: EvidenceRecord) -> _EvidenceToken:
+        if not isinstance(record, EvidenceRecord):
+            raise TypeError("record must be an EvidenceRecord")
+        if record.disposition is not EvidenceDisposition.ATTEMPT:
+            raise ValueError("evidence must begin as an attempt")
+        token = _EvidenceToken(len(self._records), record.epoch, record.kind)
+        self._records.append(record)
+        return token
+
+    def commit(self, token: _EvidenceToken) -> None:
+        record = self._require_attempt(token)
+        self._records[token.index] = replace(record, disposition=EvidenceDisposition.COMMITTED)
+
+    def fail(self, token: _EvidenceToken, code: ErrorCode) -> None:
+        if not isinstance(code, ErrorCode) or code is ErrorCode.NONE:
+            raise ValueError("failure evidence requires a non-NONE ErrorCode")
+        record = self._require_attempt(token)
+        self._records[token.index] = replace(
+            record,
+            disposition=EvidenceDisposition.FAILED,
+            error_code=code,
         )
 
-    def record_stage(
-        self,
-        profile: DeviceProfile,
-        manifest: StageManifest,
-        state: AdapterState,
-        recovery_status: RecoveryStatus,
-    ) -> None:
-        """Append one stage-completion record without backend-native data."""
-        self._records.append(
-            EvidenceRecord(
-                schema_version=SCHEMA_VERSION,
-                kind=EvidenceKind.STAGE,
-                stage=manifest.stage,
-                commit=manifest.commit,
-                profile_digest=profile.digest(),
-                interface=manifest.interface,
-                operation=None,
-                brightness=None,
-                key=None,
-                payload_size=0,
-                status=None,
-                error_code=None,
-                duration_ms=0,
-                event_count=0,
-                expected_result=manifest.expected_result,
-                recovery_plan=manifest.recovery_plan,
-                approval_reference=manifest.approval_reference,
-                adapter_state=state,
-                recovery_status=recovery_status,
-            )
-        )
+    def _require_attempt(self, token: _EvidenceToken) -> EvidenceRecord:
+        if (
+            not isinstance(token, _EvidenceToken)
+            or isinstance(token.index, bool)
+            or not 0 <= token.index < len(self._records)
+        ):
+            raise ValueError("stale_evidence_token")
+        record = self._records[token.index]
+        if (
+            record.disposition is not EvidenceDisposition.ATTEMPT
+            or record.epoch != token.epoch
+            or record.kind is not token.kind
+        ):
+            raise ValueError("stale_evidence_token")
+        return record
 
     def to_json(self) -> str:
-        """Render the in-memory closed schema deterministically without writing files."""
         return json.dumps(
             [record.to_dict() for record in self._records],
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
         )
+
+
+def operation_evidence(
+    profile: DeviceProfile,
+    manifest: StageManifest,
+    command: AdapterCommand,
+    result: OperationResult,
+    epoch: int,
+) -> EvidenceRecord:
+    return EvidenceRecord(
+        schema_version=SCHEMA_VERSION,
+        kind=EvidenceKind.OPERATION,
+        disposition=EvidenceDisposition.ATTEMPT,
+        epoch=epoch,
+        stage=manifest.stage,
+        commit=manifest.commit,
+        profile_digest=profile.digest(),
+        interface=manifest.interface,
+        operation=command.operation,
+        brightness=command.brightness,
+        key=command.key,
+        payload_size=len(command.image) if command.image is not None else 0,
+        status=result.status,
+        error_code=result.error_code,
+        duration_ms=result.duration_ms,
+        event_count=len(result.events),
+        expected_result=manifest.expected_result,
+        recovery_plan=manifest.recovery_plan,
+        approval_reference=manifest.approval_reference,
+        adapter_state=None,
+        recovery_status=None,
+    )
+
+
+def stage_evidence(
+    profile: DeviceProfile,
+    manifest: StageManifest,
+    state: AdapterState,
+    recovery_status: RecoveryStatus,
+    epoch: int,
+) -> EvidenceRecord:
+    return EvidenceRecord(
+        schema_version=SCHEMA_VERSION,
+        kind=EvidenceKind.STAGE,
+        disposition=EvidenceDisposition.ATTEMPT,
+        epoch=epoch,
+        stage=manifest.stage,
+        commit=manifest.commit,
+        profile_digest=profile.digest(),
+        interface=manifest.interface,
+        operation=None,
+        brightness=None,
+        key=None,
+        payload_size=0,
+        status=None,
+        error_code=None,
+        duration_ms=0,
+        event_count=0,
+        expected_result=manifest.expected_result,
+        recovery_plan=manifest.recovery_plan,
+        approval_reference=manifest.approval_reference,
+        adapter_state=state,
+        recovery_status=recovery_status,
+    )

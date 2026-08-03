@@ -49,22 +49,22 @@ REVIEWED_SOURCE_SHA256 = {
         "e391d36f42540034d26898183b2909057779b03f39e85be2c1c9574b4585d610"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "860cdc42e0eefde301da5a3f36b3488ab8dbed2bf768a6d86ae07af608afe2d1"
+        "064bcbae8af3d3fc836a41536138f4970144e4af3a19e3a49855b4991bfc0216"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
-        "aab721b608fd5303837e1e29b38751b7efbbf351cc887018825bd3792ed13943"
+        "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "816d5e368152b58ea872284314c52e138a580aa29a8e5a748ed3a4336bdd3788"
+        "8cab4301ff7204e8a47554e839177744033a77237e946373c5681a1725410d4d"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "a6bfcaa92061099132ecc8a128b2711822c4c433bd3fff5ee935ca5feaae06f7"
+        "c3bf0cb263d6f30d657497c8821982135de78f1707a4aca9610879fff800cc5b"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
-        "e96907fa4d2b257a1af2739b249d8a3fcc6764e5c29414cee154fdee3ca8fba0"
+        "f2c43b1cdac1d1b44b73dde3ff1866801e9306dc185329062fdb9c762b0f79ea"
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
-        "5d9484d50a2f66b859dda802f35a6a82385e11f39949d92ec8125600230619d4"
+        "f48f4792f130dde3a4d533e9b77be197bb75beb90371a5f0585c601165aef3db"
     ),
     Path("src/streamdock_n3/__init__.py"): (
         "0612dae9f893b0736b2bbc584afc2fa001e4e7468ab622a9e0061453f5b4d04b"
@@ -186,7 +186,7 @@ MUTATING_METHODS = {
     "symmetric_difference_update",
     "update",
 }
-PROTECTED_SYMBOLS = {"HELPER_MODULE", "subprocess", "sys"}
+PROTECTED_SYMBOLS = {"subprocess", "sys"}
 FORBIDDEN_OS_PROCESS_CALLS = {
     "os.fork",
     "os.forkpty",
@@ -394,15 +394,6 @@ def _allowed_protected_mutation(
     node: ast.AST,
     target: ast.expr,
 ) -> bool:
-    helper_definition = (
-        node in tree.body
-        and isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and target is node.targets[0]
-        and isinstance(target, ast.Name)
-        and target.id == "HELPER_MODULE"
-        and _literal(node.value, "streamdock_n3.hardware.helper_main")
-    )
     root_bytecode_guard = (
         path == Path("src/streamdock_n3/__init__.py")
         and isinstance(node, ast.Assign)
@@ -414,7 +405,7 @@ def _allowed_protected_mutation(
         and target.attr == "dont_write_bytecode"
         and _literal(node.value, True)
     )
-    return helper_definition or root_bytecode_guard
+    return root_bytecode_guard
 
 
 def _call_violations(path: Path, tree: ast.Module) -> list[str]:
@@ -619,11 +610,11 @@ def _fixed_argv(call: ast.Call, bindings: dict[str, set[str]]) -> bool:
         return False
     value = call.args[0]
     return (
-        len(value.elts) == 3
+        len(value.elts) == 4
         and _canonical_names(value.elts[0], bindings) == {"sys.executable"}
-        and _literal(value.elts[1], "-m")
-        and isinstance(value.elts[2], ast.Name)
-        and value.elts[2].id == "HELPER_MODULE"
+        and _literal(value.elts[1], "-I")
+        and _literal(value.elts[2], "-m")
+        and _literal(value.elts[3], "streamdock_n3.hardware.helper_main")
     )
 
 
@@ -811,22 +802,6 @@ def _fixed_helper_violations(trees: Sequence[tuple[Path, ast.Module]]) -> list[s
     if path.name != "ipc.py" or subprocess_names != {"subprocess.run"}:
         violations.append(f"{path}:{call.lineno}: only ipc.py subprocess.run is allowed")
 
-    helper_assignments = [
-        node
-        for node in tree.body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id == "HELPER_MODULE"
-    ]
-    helper_assignment = helper_assignments[0] if len(helper_assignments) == 1 else None
-    helper_store = helper_assignment.targets[0] if helper_assignment is not None else None
-    if (
-        helper_assignment is None
-        or not _literal(helper_assignment.value, "streamdock_n3.hardware.helper_main")
-        or not _symbol_is_immutable(tree, "HELPER_MODULE", allowed_store=helper_store)
-    ):
-        violations.append("HELPER_MODULE must have one literal module-scope definition")
     if not _single_exact_import(tree, "sys") or not _symbol_is_immutable(tree, "sys"):
         violations.append("sys must be one immutable exact import")
     if not _single_exact_import(tree, "subprocess") or not _symbol_is_immutable(
@@ -1371,36 +1346,24 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     backend_call = backend.BackendCall(operation, None, None, None, 0)
     fake_backend = backend.FakeBackend(events=(event,))
     recorder = evidence.EvidenceRecorder()
-    capability_gate = gate.CapabilityGate()
-    stage_session = gate.StageSession(manifest, (0,))
+    command_policy = gate.CommandPolicy()
     capability_snapshot = contracts.CapabilitySnapshot(
-        state, None, None, None, 0, stage, stage_phase
+        state, None, None, None, 1, stage, stage_phase
     )
     session_snapshot = contracts.StageSessionSnapshot(stage, stage_phase, 0, 0, False)
     gate_violation = gate.GateViolation(contracts.ErrorCode.STATE_NOT_ALLOWED)
-    n3_adapter = adapter.N3Adapter(profile, "0123456789abcdef", fake_backend, evidence=recorder)
-    request = ipc.IpcRequest(profile, state, manifest, command)
+    n3_adapter = adapter.N3Adapter(profile, "0123456789abcdef", fake_backend)
+    request = ipc.IpcRequest(profile, capability_snapshot, manifest, 0, command)
+    evidence_disposition = evidence.EvidenceDisposition(
+        evidence.EvidenceDisposition.ATTEMPT.value
+    )
     evidence_kind = evidence.EvidenceKind(evidence.EvidenceKind.OPERATION.value)
-    evidence_record = evidence.EvidenceRecord(
-        contracts.SCHEMA_VERSION,
-        evidence_kind,
-        stage,
-        "0123456789abcdef",
-        profile.digest(),
-        interface,
-        operation,
-        None,
-        None,
-        0,
-        result_status,
-        error_code,
-        0,
-        0,
-        "g1-validated",
-        "g1-recovery",
-        "test:g1",
-        None,
-        None,
+    evidence_record = evidence.operation_evidence(
+        profile,
+        manifest,
+        command,
+        result,
+        1,
     )
     constructed = {
         type(value).__name__
@@ -1423,14 +1386,14 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             event,
             result,
             gate_violation,
-            stage_session,
+            command_policy,
             capability_snapshot,
             session_snapshot,
-            capability_gate,
             backend_call,
             fake_backend,
             n3_adapter,
             request,
+            evidence_disposition,
             evidence_kind,
             evidence_record,
             recorder,
@@ -1441,7 +1404,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         for path in G0_MODULES
         for tree in (ast.parse(_source(path), filename=str(path)),)
         for node in tree.body
-        if isinstance(node, ast.ClassDef)
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
     }
     assert declared - {"Backend", "EvidenceSink"} == constructed
     assert calls == []
@@ -1554,9 +1517,8 @@ def test_subprocess_gate_counts_alias_calls_across_the_complete_closure() -> Non
 import subprocess
 from subprocess import run as extra_run
 import sys
-HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 def invoke(payload, timeout):
-    argv = [sys.executable, "-m", HELPER_MODULE]
+    argv = [sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"]
     subprocess.run(argv, input=payload, capture_output=True, text=True,
                    encoding="utf-8", errors="strict", check=False, timeout=timeout)
     extra_run(argv)
@@ -1617,7 +1579,11 @@ def test_call_gate_rejects_canonical_file_api_aliases(
 @pytest.mark.parametrize(
     "mutation",
     (
-        "options = {'shell': True}\n    argv = [sys.executable, '-m', HELPER_MODULE]\n    ",
+        (
+            "options = {'shell': True}\n    "
+            "argv = [sys.executable, '-I', '-m', "
+            "'streamdock_n3.hardware.helper_main']\n    "
+        ),
         "argv = ['/bin/unsafe']\n    ",
     ),
 )
@@ -1631,13 +1597,15 @@ def test_fixed_helper_gate_rejects_kwargs_and_decoy_argv_bypasses(
     else:
         setup = mutation
         extra_keywords = ""
-        trailing = '\n    argv = [sys.executable, "-m", HELPER_MODULE]'
+        trailing = (
+            '\n    argv = [sys.executable, "-I", "-m", '
+            '"streamdock_n3.hardware.helper_main"]'
+        )
     path = Path("src/streamdock_n3/hardware/ipc.py")
     tree = ast.parse(
         f"""
 import subprocess
 import sys
-HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 def invoke(payload, timeout):
     {setup}completed = subprocess.run(
         argv, input=payload, capture_output=True, text=True, encoding="utf-8",
@@ -1766,7 +1734,6 @@ def _direct_helper_tree(*, prelude: str = "", timeout: str = "timeout_ms / 1000"
 import subprocess
 import sys
 MAX_DEADLINE_MS = 600_000
-HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 {prelude}
 def run_fake_helper(request, timeout_ms):
     if (
@@ -1776,7 +1743,7 @@ def run_fake_helper(request, timeout_ms):
     ):
         raise ValueError("invalid_timeout")
     return subprocess.run(
-        [sys.executable, "-m", HELPER_MODULE],
+        [sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"],
         input="{{}}", capture_output=True, text=True, encoding="utf-8",
         errors="strict", check=False, timeout={timeout})
 ''',
@@ -1794,13 +1761,7 @@ def test_fixed_helper_gate_accepts_only_direct_exact_argv() -> None:
     ("prelude", "timeout"),
     (
         ("sys = object()", "timeout_ms / 1000"),
-        ("HELPER_MODULE = 'unsafe.module'", "timeout_ms / 1000"),
-        ("def mutate():\n    global HELPER_MODULE", "timeout_ms / 1000"),
-        (
-            "def outer():\n    HELPER_MODULE = 'unsafe.module'\n"
-            "    def mutate():\n        nonlocal HELPER_MODULE",
-            "timeout_ms / 1000",
-        ),
+        ("subprocess = object()", "timeout_ms / 1000"),
         ("", "None"),
         ("", "timeout_ms"),
     ),
@@ -1925,13 +1886,11 @@ def test_call_gate_rejects_dangerous_references_in_binding_patterns_and_containe
 @pytest.mark.parametrize(
     "source",
     (
-        "import sys\nsys.modules[__name__].HELPER_MODULE = 'unsafe.module'\n",
         "import subprocess\nsubprocess.__dict__['run'] = lambda *args: None\n",
-        "import sys\ndel sys.modules[__name__].HELPER_MODULE\n",
         "import subprocess\nsubprocess.__dict__.update({'run': lambda: None})\n",
         (
-            "import sys\nmodule = sys.modules[__name__]\n"
-            "module.HELPER_MODULE = 'unsafe.module'\n"
+            "import subprocess\nmodule = subprocess\n"
+            "module.run = lambda *args: None\n"
         ),
     ),
 )
@@ -1941,15 +1900,6 @@ def test_call_gate_rejects_indirect_writes_through_protected_roots(source: str) 
     assert _call_violations(path, ast.parse(source, filename=str(path))) != []
 
 
-def test_fixed_helper_gate_rejects_indirect_helper_module_mutation() -> None:
-    path = Path("src/streamdock_n3/hardware/ipc.py")
-    tree = _direct_helper_tree(
-        prelude="sys.modules[__name__].HELPER_MODULE = 'unsafe.module'"
-    )
-
-    assert _fixed_helper_violations(((path, tree),)) != []
-
-
 def test_fixed_helper_gate_rejects_timeout_parameter_rebinding_to_a_huge_value() -> None:
     path = Path("src/streamdock_n3/hardware/ipc.py")
     tree = ast.parse(
@@ -1957,7 +1907,6 @@ def test_fixed_helper_gate_rejects_timeout_parameter_rebinding_to_a_huge_value()
 import subprocess
 import sys
 MAX_DEADLINE_MS = 600_000
-HELPER_MODULE = "streamdock_n3.hardware.helper_main"
 def run_fake_helper(request, timeout_ms):
     if (
         isinstance(timeout_ms, bool)
@@ -1967,7 +1916,7 @@ def run_fake_helper(request, timeout_ms):
         raise ValueError("invalid_timeout")
     timeout_ms = 10**100
     return subprocess.run(
-        [sys.executable, "-m", HELPER_MODULE],
+        [sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"],
         input="{}", capture_output=True, text=True, encoding="utf-8",
         errors="strict", check=False, timeout=timeout_ms / 1000)
 ''',

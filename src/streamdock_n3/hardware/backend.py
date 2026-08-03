@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -35,13 +34,17 @@ class BackendCall:
     payload_sha256: str | None
     payload_size: int
 
-
-_ERROR_FOR_STATUS = {
-    ResultStatus.REJECTED: ErrorCode.OPERATION_NOT_ALLOWED,
-    ResultStatus.TIMEOUT: ErrorCode.DEADLINE_EXCEEDED,
-    ResultStatus.BACKEND_ERROR: ErrorCode.BACKEND_FAILURE,
-    ResultStatus.DISCONNECTED: ErrorCode.DEVICE_DISCONNECTED,
-}
+    @classmethod
+    def from_command(cls, command: AdapterCommand) -> BackendCall:
+        if not isinstance(command, AdapterCommand):
+            raise TypeError("command must be an AdapterCommand")
+        return cls(
+            operation=command.operation,
+            brightness=command.brightness,
+            key=command.key,
+            payload_sha256=command.image_digest(),
+            payload_size=len(command.image) if command.image is not None else 0,
+        )
 
 
 class FakeBackend:
@@ -50,10 +53,11 @@ class FakeBackend:
     def __init__(
         self,
         events: tuple[NormalizedInputEvent, ...] = (),
-        outcomes: Mapping[Operation, ResultStatus] | None = None,
+        scripted_results: tuple[OperationResult, ...] = (),
     ) -> None:
         self._events = tuple(events)
-        self._outcomes = dict(outcomes or {})
+        self._scripted_results = tuple(scripted_results)
+        self._result_index = 0
         self.calls: list[BackendCall] = []
 
     def execute(
@@ -62,17 +66,10 @@ class FakeBackend:
         manifest: StageManifest,
     ) -> OperationResult:
         del manifest
-        self.calls.append(
-            BackendCall(
-                operation=command.operation,
-                brightness=command.brightness,
-                key=command.key,
-                payload_sha256=command.image_digest(),
-                payload_size=len(command.image) if command.image is not None else 0,
-            )
-        )
-        status = self._outcomes.get(command.operation, ResultStatus.SUCCEEDED)
-        if status is not ResultStatus.SUCCEEDED:
-            return OperationResult(status, _ERROR_FOR_STATUS[status], 0)
+        self.calls.append(BackendCall.from_command(command))
+        if self._result_index < len(self._scripted_results):
+            result = self._scripted_results[self._result_index]
+            self._result_index += 1
+            return result
         events = self._events if command.operation is Operation.OBSERVE_INPUTS else ()
         return OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0, events)

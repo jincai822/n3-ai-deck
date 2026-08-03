@@ -17,6 +17,7 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     SCHEMA_VERSION,
     AdapterCommand,
     AdapterState,
+    CapabilitySnapshot,
     CommandSpec,
     CommandStep,
     DeviceProfile,
@@ -32,6 +33,7 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     ResultStatus,
     Stage,
     StageManifest,
+    StagePhase,
 )
 
 MAX_REQUEST_BYTES = 1_500_000
@@ -41,9 +43,9 @@ OVERFLOW_SENTINEL_BYTES = 1
 MAX_FRAMED_REQUEST_BYTES = MAX_REQUEST_BYTES + LF_FRAMING_BYTES
 REQUEST_READ_BYTES = MAX_FRAMED_REQUEST_BYTES + OVERFLOW_SENTINEL_BYTES
 MAX_FRAMED_RESPONSE_BYTES = MAX_RESPONSE_BYTES + LF_FRAMING_BYTES
-HELPER_MODULE = "streamdock_n3.hardware.helper_main"
-
-_REQUEST_KEYS = frozenset({"schema_version", "profile", "state", "manifest", "command"})
+_REQUEST_KEYS = frozenset(
+    {"schema_version", "profile", "capability", "manifest", "step_index", "command"}
+)
 _PROFILE_KEYS = frozenset(
     {
         "schema_version",
@@ -57,6 +59,9 @@ _PROFILE_KEYS = frozenset(
     }
 )
 _INTERFACE_KEYS = frozenset({"number", "class", "subclass", "protocol"})
+_CAPABILITY_KEYS = frozenset(
+    {"state", "profile_digest", "bcd_device", "interface", "epoch", "stage", "phase"}
+)
 _MANIFEST_KEYS = frozenset(
     {
         "schema_version",
@@ -81,18 +86,21 @@ _EVENT_KEYS = frozenset({"kind", "control_id", "action", "monotonic_ns"})
 @dataclass(frozen=True, slots=True)
 class IpcRequest:
     profile: DeviceProfile
-    state: AdapterState
+    capability: CapabilitySnapshot
     manifest: StageManifest
+    step_index: int
     command: AdapterCommand
     schema_version: int = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         if not isinstance(self.profile, DeviceProfile):
             raise TypeError("profile must be a DeviceProfile")
-        if not isinstance(self.state, AdapterState):
-            raise TypeError("state must be an AdapterState")
+        if not isinstance(self.capability, CapabilitySnapshot):
+            raise TypeError("capability must be a CapabilitySnapshot")
         if not isinstance(self.manifest, StageManifest):
             raise TypeError("manifest must be a StageManifest")
+        if isinstance(self.step_index, bool) or not isinstance(self.step_index, int):
+            raise TypeError("step_index must be an integer")
         if not isinstance(self.command, AdapterCommand):
             raise TypeError("command must be an AdapterCommand")
         if (
@@ -186,6 +194,39 @@ def _parse_profile(value: object) -> DeviceProfile:
         protocol_status=ProtocolStatus(_require_str(wire["protocol_status"])),
         source_commit=_require_str(wire["source_commit"]),
         schema_version=schema_version,
+    )
+
+
+def _capability_to_wire(capability: CapabilitySnapshot) -> dict[str, object]:
+    return {
+        "state": capability.state.value,
+        "profile_digest": capability.profile_digest,
+        "bcd_device": capability.bcd_device,
+        "interface": (
+            _interface_to_wire(capability.interface) if capability.interface is not None else None
+        ),
+        "epoch": capability.epoch,
+        "stage": capability.stage.value if capability.stage is not None else None,
+        "phase": capability.phase.value if capability.phase is not None else None,
+    }
+
+
+def _parse_capability(value: object) -> CapabilitySnapshot:
+    wire = _require_exact_keys(value, _CAPABILITY_KEYS)
+    profile_digest_value = wire["profile_digest"]
+    if profile_digest_value is not None and not isinstance(profile_digest_value, str):
+        raise ValueError
+    interface_value = wire["interface"]
+    stage_value = wire["stage"]
+    phase_value = wire["phase"]
+    return CapabilitySnapshot(
+        state=AdapterState(_require_str(wire["state"])),
+        profile_digest=profile_digest_value,
+        bcd_device=_require_optional_int(wire["bcd_device"]),
+        interface=_parse_interface(interface_value) if interface_value is not None else None,
+        epoch=_require_int(wire["epoch"]),
+        stage=Stage(_require_str(stage_value)) if stage_value is not None else None,
+        phase=StagePhase(_require_str(phase_value)) if phase_value is not None else None,
     )
 
 
@@ -314,8 +355,9 @@ def encode_request(request: IpcRequest) -> str:
     wire = {
         "schema_version": request.schema_version,
         "profile": _profile_to_wire(request.profile),
-        "state": request.state.value,
+        "capability": _capability_to_wire(request.capability),
         "manifest": _manifest_to_wire(request.manifest),
+        "step_index": request.step_index,
         "command": _command_to_wire(request.command),
     }
     encoded = json.dumps(wire, sort_keys=True, separators=(",", ":"))
@@ -332,8 +374,9 @@ def decode_request(text: str) -> IpcRequest:
         wire = _require_exact_keys(_load_json(text), _REQUEST_KEYS)
         request = IpcRequest(
             profile=_parse_profile(wire["profile"]),
-            state=AdapterState(_require_str(wire["state"])),
+            capability=_parse_capability(wire["capability"]),
             manifest=_parse_manifest(wire["manifest"]),
+            step_index=_require_int(wire["step_index"]),
             command=_parse_command(wire["command"]),
             schema_version=_require_int(wire["schema_version"]),
         )
@@ -400,7 +443,7 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
 
     try:
         completed = subprocess.run(
-            [sys.executable, "-m", HELPER_MODULE],
+            [sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"],
             input=encode_request(request) + "\n",
             capture_output=True,
             text=True,

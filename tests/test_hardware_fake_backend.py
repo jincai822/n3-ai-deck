@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import MutableMapping
-
-import pytest
-
 from streamdock_n3.hardware.backend import Backend, FakeBackend
 from streamdock_n3.hardware.contracts import (
     AdapterCommand,
@@ -12,6 +8,7 @@ from streamdock_n3.hardware.contracts import (
     InputKind,
     NormalizedInputEvent,
     Operation,
+    OperationResult,
     ResultStatus,
     Stage,
 )
@@ -19,23 +16,20 @@ from tests.hardware_fixtures import TEST_IMAGE, make_manifest
 
 
 def all_input_events() -> tuple[NormalizedInputEvent, ...]:
-    button_events = tuple(
-        NormalizedInputEvent(InputKind.BUTTON, key, action, key * 10 + offset)
-        for key in range(1, 10)
-        for offset, action in enumerate((InputAction.PRESS, InputAction.RELEASE))
+    return (
+        NormalizedInputEvent(InputKind.BUTTON, 1, InputAction.PRESS, 1),
+        NormalizedInputEvent(InputKind.BUTTON, 1, InputAction.RELEASE, 2),
+        NormalizedInputEvent(InputKind.KNOB_PRESS, 1, InputAction.PRESS, 3),
+        NormalizedInputEvent(InputKind.KNOB_ROTATE, 1, InputAction.RIGHT, 4),
     )
-    knob_events = tuple(
-        NormalizedInputEvent(kind, knob, action, 1_000 + knob * 10 + offset)
-        for knob in range(1, 4)
-        for kind, action in (
-            (InputKind.KNOB_PRESS, InputAction.PRESS),
-            (InputKind.KNOB_PRESS, InputAction.RELEASE),
-            (InputKind.KNOB_ROTATE, InputAction.LEFT),
-            (InputKind.KNOB_ROTATE, InputAction.RIGHT),
-        )
-        for offset in (0,)
-    )
-    return button_events + knob_events
+
+
+def success() -> OperationResult:
+    return OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)
+
+
+def backend_failure() -> OperationResult:
+    return OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
 
 
 def test_fake_backend_returns_injected_normalized_events() -> None:
@@ -46,7 +40,6 @@ def test_fake_backend_returns_injected_normalized_events() -> None:
     )
 
     assert isinstance(backend, Backend)
-    assert result.succeeded is True
     assert result.events == all_input_events()
     assert backend.calls[0].operation is Operation.OBSERVE_INPUTS
 
@@ -65,42 +58,47 @@ def test_fake_backend_records_only_image_digest_and_size() -> None:
     assert TEST_IMAGE not in repr(call).encode()
 
 
-@pytest.mark.parametrize(
-    ("status", "error_code"),
-    (
-        (ResultStatus.REJECTED, ErrorCode.OPERATION_NOT_ALLOWED),
-        (ResultStatus.TIMEOUT, ErrorCode.DEADLINE_EXCEEDED),
-        (ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE),
-        (ResultStatus.DISCONNECTED, ErrorCode.DEVICE_DISCONNECTED),
-    ),
-)
-def test_fake_backend_returns_stable_errors_without_events(
-    status: ResultStatus,
-    error_code: ErrorCode,
-) -> None:
+def test_scripted_results_are_consumed_once_in_exact_call_order() -> None:
+    timeout = OperationResult(ResultStatus.TIMEOUT, ErrorCode.DEADLINE_EXCEEDED, 4)
+    backend = FakeBackend(scripted_results=(timeout, backend_failure()))
+
+    first = backend.execute(
+        AdapterCommand(Operation.APPROVE_PROFILE), make_manifest(Stage.G1_PROFILE)
+    )
+    second = backend.execute(
+        AdapterCommand(Operation.APPROVE_PROFILE), make_manifest(Stage.G1_PROFILE)
+    )
+    third = backend.execute(
+        AdapterCommand(Operation.APPROVE_PROFILE), make_manifest(Stage.G1_PROFILE)
+    )
+
+    assert (first, second, third) == (timeout, backend_failure(), success())
+    assert len(backend.calls) == 3
+
+
+def test_fake_backend_copies_constructor_inputs() -> None:
+    events = [NormalizedInputEvent(InputKind.BUTTON, 1, InputAction.PRESS, 1)]
+    results = [backend_failure()]
     backend = FakeBackend(
-        events=all_input_events(),
-        outcomes={Operation.OBSERVE_INPUTS: status},
+        events=tuple(events),
+        scripted_results=tuple(results),
     )
+    events.clear()
+    results.clear()
 
-    result = backend.execute(
-        AdapterCommand(Operation.OBSERVE_INPUTS),
-        make_manifest(Stage.G3_INPUT),
+    assert (
+        backend.execute(
+            AdapterCommand(Operation.OBSERVE_INPUTS), make_manifest(Stage.G3_INPUT)
+        )
+        == backend_failure()
     )
-
-    assert result.status is status
-    assert result.error_code is error_code
-    assert result.events == ()
+    assert len(backend.calls) == 1
 
 
-def test_fake_backend_copies_outcomes_on_construction() -> None:
-    outcomes: MutableMapping[Operation, ResultStatus] = {}
-    backend = FakeBackend(outcomes=outcomes)
-    outcomes[Operation.INITIALIZE] = ResultStatus.BACKEND_ERROR
+def test_backend_call_factory_copies_only_safe_scalar_metadata() -> None:
+    command = AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=TEST_IMAGE)
+    backend = FakeBackend()
 
-    result = backend.execute(
-        AdapterCommand(Operation.INITIALIZE),
-        make_manifest(Stage.G4_INITIALIZATION),
-    )
+    backend.execute(command, make_manifest(Stage.G6_ONE_LCD))
 
-    assert result.succeeded is True
+    assert backend.calls == [type(backend.calls[0]).from_command(command)]

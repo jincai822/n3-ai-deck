@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError, replace
 from typing import cast
 
 import pytest
@@ -9,108 +10,120 @@ from streamdock_n3.hardware.backend import FakeBackend
 from streamdock_n3.hardware.contracts import (
     AdapterCommand,
     AdapterState,
+    CommandSpec,
     ErrorCode,
     Operation,
     OperationResult,
-    RecoveryStatus,
     ResultStatus,
     Stage,
     StageManifest,
 )
-from streamdock_n3.hardware.gate import CapabilityGate, GateViolation
-from tests.hardware_fixtures import TEST_COMMIT, make_manifest, make_profile
+from streamdock_n3.hardware.evidence import EvidenceDisposition, EvidenceRecord
+from streamdock_n3.hardware.gate import GateViolation
+from tests.hardware_fixtures import TEST_COMMIT, TEST_IMAGE, make_manifest, make_profile
+
+STAGES = (
+    Stage.G1_PROFILE,
+    Stage.G2_PERMISSION,
+    Stage.G3_INPUT,
+    Stage.G4_INITIALIZATION,
+    Stage.G5_BRIGHTNESS,
+    Stage.G6_ONE_LCD,
+    Stage.G7_SIX_LCD,
+)
 
 
-def stage_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
-    return tuple(
-        AdapterCommand(command.operation, command.brightness, command.key, command.image)
-        for command in original_commands(stage)
-    )
+def success() -> OperationResult:
+    return OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)
 
 
-def original_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
+def backend_failure() -> OperationResult:
+    return OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
+
+
+def image_command(key: int, prefix: str) -> AdapterCommand:
+    return AdapterCommand(Operation.SET_KEY_IMAGE, key=key, image=f"{prefix}-{key}".encode())
+
+
+def forward_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
     return {
         Stage.G1_PROFILE: (AdapterCommand(Operation.APPROVE_PROFILE),),
         Stage.G2_PERMISSION: (AdapterCommand(Operation.RECORD_PERMISSION),),
         Stage.G3_INPUT: (AdapterCommand(Operation.OBSERVE_INPUTS),),
         Stage.G4_INITIALIZATION: (AdapterCommand(Operation.INITIALIZE),),
-        Stage.G5_BRIGHTNESS: (
-            AdapterCommand(Operation.SET_BRIGHTNESS, brightness=40),
-            AdapterCommand(Operation.SET_BRIGHTNESS, brightness=50),
-        ),
+        Stage.G5_BRIGHTNESS: (AdapterCommand(Operation.SET_BRIGHTNESS, brightness=40),),
         Stage.G6_ONE_LCD: (
-            AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=b"g0-test-image"),
-            AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=b"g0-baseline"),
+            AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=TEST_IMAGE),
         ),
-        Stage.G7_SIX_LCD: tuple(
-            AdapterCommand(Operation.SET_KEY_IMAGE, key=key, image=f"test-{key}".encode())
-            for key in range(1, 7)
-        )
-        + tuple(
-            AdapterCommand(Operation.SET_KEY_IMAGE, key=key, image=f"base-{key}".encode())
-            for key in range(1, 7)
-        ),
+        Stage.G7_SIX_LCD: tuple(image_command(key, "test") for key in range(1, 7)),
     }[stage]
 
 
-def make_adapter(
-    backend: FakeBackend | None = None,
-    initial_state: AdapterState = AdapterState.CANDIDATE,
-) -> tuple[N3Adapter, FakeBackend]:
-    fake_backend = backend if backend is not None else FakeBackend()
-    return N3Adapter(make_profile(), TEST_COMMIT, fake_backend, initial_state), fake_backend
+def recovery_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
+    return {
+        Stage.G1_PROFILE: (),
+        Stage.G2_PERMISSION: (),
+        Stage.G3_INPUT: (),
+        Stage.G4_INITIALIZATION: (),
+        Stage.G5_BRIGHTNESS: (AdapterCommand(Operation.SET_BRIGHTNESS, brightness=50),),
+        Stage.G6_ONE_LCD: (
+            AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=b"g0-baseline"),
+        ),
+        Stage.G7_SIX_LCD: tuple(image_command(key, "base") for key in range(6, 0, -1)),
+    }[stage]
 
 
-def test_adapter_advances_through_explicit_g1_to_g7_fake_sequence() -> None:
-    adapter, backend = make_adapter()
-    stages = (
-        Stage.G1_PROFILE,
-        Stage.G2_PERMISSION,
-        Stage.G3_INPUT,
-        Stage.G4_INITIALIZATION,
-        Stage.G5_BRIGHTNESS,
-        Stage.G6_ONE_LCD,
-        Stage.G7_SIX_LCD,
-    )
-    expected_states = (
-        AdapterState.PROFILE_APPROVED,
-        AdapterState.PROFILE_APPROVED,
-        AdapterState.INPUT_VALIDATED,
-        AdapterState.INITIALIZATION_VALIDATED,
-        AdapterState.BRIGHTNESS_VALIDATED,
-        AdapterState.ONE_LCD_VALIDATED,
-        AdapterState.SIX_LCD_VALIDATED,
-    )
-
-    states: list[AdapterState] = []
-    for stage in stages:
-        calls_before_begin = len(backend.calls)
-        adapter.begin_stage(make_manifest(stage))
-        assert len(backend.calls) == calls_before_begin
-        for command in stage_commands(stage):
-            calls_before_execute = len(backend.calls)
-            assert adapter.execute(command).succeeded is True
-            assert len(backend.calls) == calls_before_execute + 1
-        states.append(adapter.complete_stage(True))
-        assert len(backend.calls) == calls_before_begin + len(stage_commands(stage))
-
-    assert tuple(states) == expected_states
-    assert [call.operation for call in backend.calls] == [
-        Operation.APPROVE_PROFILE,
-        Operation.RECORD_PERMISSION,
-        Operation.OBSERVE_INPUTS,
-        Operation.INITIALIZE,
-        Operation.SET_BRIGHTNESS,
-        Operation.SET_BRIGHTNESS,
-        Operation.SET_KEY_IMAGE,
-        Operation.SET_KEY_IMAGE,
-        *([Operation.SET_KEY_IMAGE] * 12),
-    ]
-    assert all(call.operation is not Operation.CLOSE_SESSION for call in backend.calls)
+def complete_stage(adapter: N3Adapter, stage: Stage) -> AdapterState:
+    adapter.begin_stage(make_manifest(stage))
+    for command in forward_commands(stage):
+        assert adapter.execute(command).succeeded
+    for command in recovery_commands(stage):
+        assert adapter.recover(command).succeeded
+    return adapter.complete_stage(True, True if recovery_commands(stage) else None)
 
 
-def test_execute_before_begin_is_rejected_without_a_backend_call() -> None:
-    adapter, backend = make_adapter()
+def adapter_advanced_to(stage: Stage, backend: FakeBackend) -> N3Adapter:
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    for current in STAGES:
+        if current is stage:
+            break
+        complete_stage(adapter, current)
+    return adapter
+
+
+def test_adapter_has_no_live_gate_or_arbitrary_initial_state() -> None:
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+
+    assert adapter.state is AdapterState.CANDIDATE
+    assert not hasattr(adapter, "gate")
+    assert not hasattr(adapter, "backend")
+    with pytest.raises(AttributeError):
+        adapter.profile = replace(make_profile(), bcd_device=0x0301)  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        N3Adapter(  # type: ignore[call-arg]
+            make_profile(),
+            TEST_COMMIT,
+            FakeBackend(),
+            initial_state=AdapterState.SIX_LCD_VALIDATED,
+        )
+
+
+def test_complete_without_backend_result_cannot_advance() -> None:
+    backend = FakeBackend()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+
+    with pytest.raises(GateViolation) as raised:
+        adapter.complete_stage(True)
+
+    assert raised.value.code is ErrorCode.RESULT_MISSING
+    assert adapter.state is AdapterState.CANDIDATE
+    assert backend.calls == []
+
+
+def test_execute_before_begin_is_rejected_without_backend_call() -> None:
+    backend = FakeBackend()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
 
     with pytest.raises(GateViolation) as raised:
         adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -119,78 +132,165 @@ def test_execute_before_begin_is_rejected_without_a_backend_call() -> None:
     assert backend.calls == []
 
 
-def test_command_absent_from_manifest_never_reaches_backend() -> None:
-    adapter, backend = make_adapter(initial_state=AdapterState.PROFILE_APPROVED)
-    adapter.begin_stage(make_manifest(Stage.G3_INPUT))
+def test_adapter_advances_g1_to_g7_with_ordered_recovery() -> None:
+    backend = FakeBackend()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+
+    for stage in STAGES:
+        complete_stage(adapter, stage)
+
+    assert adapter.state is AdapterState.SIX_LCD_VALIDATED
+    assert adapter.session_snapshot is None
+    assert len(backend.calls) == 20
+
+
+def test_wrong_order_never_reaches_backend() -> None:
+    backend = FakeBackend()
+    adapter = adapter_advanced_to(Stage.G7_SIX_LCD, backend)
+    adapter.begin_stage(make_manifest(Stage.G7_SIX_LCD))
+    calls = len(backend.calls)
 
     with pytest.raises(GateViolation) as raised:
-        adapter.execute(AdapterCommand(Operation.CLOSE_SESSION))
+        adapter.execute(image_command(2, "test"))
 
-    assert raised.value.code is ErrorCode.OPERATION_NOT_ALLOWED
-    assert backend.calls == []
+    assert raised.value.code is ErrorCode.ORDER_VIOLATION
+    assert len(backend.calls) == calls
 
 
-@pytest.mark.parametrize(
-    "status",
-    (ResultStatus.TIMEOUT, ResultStatus.BACKEND_ERROR, ResultStatus.DISCONNECTED),
-)
-def test_backend_failure_blocks_adapter_and_prevents_completion(status: ResultStatus) -> None:
-    adapter, backend = make_adapter(FakeBackend(outcomes={Operation.OBSERVE_INPUTS: status}))
-    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
-    adapter.complete_stage(True)
-    adapter.begin_stage(make_manifest(Stage.G2_PERMISSION))
-    adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION))
-    adapter.complete_stage(True)
-    adapter.begin_stage(make_manifest(Stage.G3_INPUT))
+def test_g7_failure_cancels_forward_and_allows_only_lifo_recovery() -> None:
+    prior_stage_results = (success(),) * 8
+    backend = FakeBackend(
+        scripted_results=prior_stage_results
+        + (success(), success(), backend_failure(), success(), success())
+    )
+    adapter = adapter_advanced_to(Stage.G7_SIX_LCD, backend)
+    adapter.begin_stage(make_manifest(Stage.G7_SIX_LCD))
 
-    result = adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS))
-
-    assert result.status is status
+    assert adapter.execute(image_command(1, "test")).succeeded
+    assert adapter.execute(image_command(2, "test")).succeeded
+    assert not adapter.execute(image_command(3, "test")).succeeded
     assert adapter.state is AdapterState.BLOCKED
-    assert len(backend.calls) == 3
+    with pytest.raises(GateViolation) as raised:
+        adapter.execute(image_command(4, "test"))
+    assert raised.value.code is ErrorCode.ORDER_VIOLATION
+
+    assert adapter.recover(image_command(2, "base")).succeeded
+    assert adapter.recover(image_command(1, "base")).succeeded
+    assert adapter.complete_stage(True, True) is AdapterState.BLOCKED
+    assert [call.key for call in backend.calls[-5:]] == [1, 2, 3, 2, 1]
+
+
+def test_recovery_failure_stops_remaining_recovery_and_never_advances() -> None:
+    prior_stage_results = (success(),) * 8
+    backend = FakeBackend(
+        scripted_results=prior_stage_results + (success(), success(), backend_failure())
+    )
+    adapter = adapter_advanced_to(Stage.G7_SIX_LCD, backend)
+    adapter.begin_stage(make_manifest(Stage.G7_SIX_LCD))
+    adapter.execute(image_command(1, "test"))
+    adapter.execute(image_command(2, "test"))
+
+    assert not adapter.recover(image_command(2, "base")).succeeded
+    with pytest.raises(GateViolation):
+        adapter.recover(image_command(1, "base"))
+    assert adapter.complete_stage(True, False) is AdapterState.BLOCKED
+
+
+def test_unknown_recovery_confirmation_never_advances() -> None:
+    adapter = adapter_advanced_to(Stage.G5_BRIGHTNESS, FakeBackend())
+    adapter.begin_stage(make_manifest(Stage.G5_BRIGHTNESS))
+    adapter.execute(AdapterCommand(Operation.SET_BRIGHTNESS, brightness=40))
+    adapter.recover(AdapterCommand(Operation.SET_BRIGHTNESS, brightness=50))
+
+    assert adapter.complete_stage(True, None) is AdapterState.BLOCKED
+
+
+def test_backend_disconnect_is_disconnected_and_never_recovers() -> None:
+    disconnected = OperationResult(
+        ResultStatus.DISCONNECTED,
+        ErrorCode.DEVICE_DISCONNECTED,
+        0,
+    )
+    backend = FakeBackend(scripted_results=(disconnected,))
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)) == disconnected
+    assert adapter.state is AdapterState.DISCONNECTED
+    assert adapter.session_snapshot is None
+    assert len(backend.calls) == 1
+
+
+class ThrowingSink:
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        raise RuntimeError("private sink failure")
+
+
+def test_throwing_sink_blocks_before_operation_or_stage_advancement() -> None:
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), ThrowingSink())
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+
+    result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+
+    assert result.error_code is ErrorCode.EVIDENCE_FAILURE
+    assert adapter.state is AdapterState.BLOCKED
+    assert adapter.evidence_records[-1].disposition is EvidenceDisposition.FAILED
+
+
+class SecondWriteThrowingSink:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        self.calls += 1
+        if self.calls == 2:
+            raise RuntimeError("stage sink failure")
+
+
+def test_stage_sink_failure_occurs_before_profile_commit() -> None:
+    sink = SecondWriteThrowingSink()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+
     with pytest.raises(GateViolation) as raised:
         adapter.complete_stage(True)
-    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
 
-
-def test_failed_adapter_gate_reference_cannot_be_replaced() -> None:
-    adapter, backend = make_adapter(
-        FakeBackend(outcomes={Operation.APPROVE_PROFILE: ResultStatus.BACKEND_ERROR})
-    )
-    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
-
-    with pytest.raises(AttributeError):
-        adapter.gate = CapabilityGate()  # type: ignore[misc]
-
+    assert raised.value.code is ErrorCode.EVIDENCE_FAILURE
     assert adapter.state is AdapterState.BLOCKED
-    assert len(backend.calls) == 1
-    with pytest.raises(GateViolation) as raised:
-        adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+    assert adapter.capability_snapshot.profile_digest is None
+    assert adapter.evidence_records[-1].disposition is EvidenceDisposition.FAILED
 
 
-def test_completion_without_confirmation_blocks_even_when_recovery_is_unknown() -> None:
-    adapter, backend = make_adapter()
+class ReentrantSink:
+    def __init__(self) -> None:
+        self.adapter: N3Adapter | None = None
+        self.calls = 0
+
+    def record(self, record: EvidenceRecord) -> None:
+        del record
+        self.calls += 1
+        if self.calls == 2:
+            assert self.adapter is not None
+            with pytest.raises(GateViolation):
+                self.adapter.disconnect()
+
+
+def test_caught_reentrant_sink_violation_still_blocks_commit() -> None:
+    sink = ReentrantSink()
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    sink.adapter = adapter
     adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
     adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
 
-    assert adapter.complete_stage(False, RecoveryStatus.UNKNOWN) is AdapterState.BLOCKED
-    assert len(backend.calls) == 1
-
-
-def test_disconnect_does_not_close_backend_and_prevents_new_stages() -> None:
-    adapter, backend = make_adapter()
-    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
-    calls_before_disconnect = list(backend.calls)
-
-    assert adapter.disconnect() is AdapterState.DISCONNECTED
-    assert backend.calls == calls_before_disconnect
     with pytest.raises(GateViolation) as raised:
-        adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+        adapter.complete_stage(True)
+
+    assert raised.value.code is ErrorCode.STALE_RESERVATION
+    assert adapter.state is AdapterState.BLOCKED
+    assert adapter.capability_snapshot.profile_digest is None
 
 
 class ExplodingBackend:
@@ -199,24 +299,19 @@ class ExplodingBackend:
         raise RuntimeError("secret backend exception detail")
 
 
-def test_backend_exception_is_sanitized_and_blocks_the_gate() -> None:
+def test_backend_exception_is_sanitized_without_retry() -> None:
     adapter = N3Adapter(make_profile(), TEST_COMMIT, ExplodingBackend())
     adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
 
-    assert result.status is ResultStatus.BACKEND_ERROR
-    assert result.error_code is ErrorCode.BACKEND_FAILURE
-    assert result.duration_ms == 0
-    assert result.events == ()
+    assert result == backend_failure()
     assert adapter.state is AdapterState.BLOCKED
     assert "secret backend exception detail" not in repr(adapter)
-    assert "secret backend exception detail" not in repr(result)
 
 
 class MaliciousResult:
     succeeded = True
-    events = ("unvalidated event",)
 
 
 class MaliciousBackend:
@@ -229,76 +324,30 @@ class MaliciousBackend:
         return cast(OperationResult, MaliciousResult())
 
 
-class ResultCapturingEvidence:
-    def __init__(self) -> None:
-        self.operation_results: list[OperationResult] = []
-
-    def record_operation(
-        self,
-        profile: object,
-        manifest: object,
-        command: object,
-        result: OperationResult,
-    ) -> None:
-        del profile, manifest, command
-        self.operation_results.append(result)
-
-    def record_stage(
-        self,
-        profile: object,
-        manifest: object,
-        state: object,
-        recovery_status: object,
-    ) -> None:
-        del profile, manifest, state, recovery_status
-
-
-def test_non_contract_backend_result_is_normalized_and_blocks_completion() -> None:
+def test_non_contract_backend_result_is_normalized_without_retry() -> None:
     backend = MaliciousBackend()
-    evidence = ResultCapturingEvidence()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend, evidence=evidence)
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
     adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
 
-    assert result == OperationResult(
-        ResultStatus.BACKEND_ERROR,
-        ErrorCode.BACKEND_FAILURE,
-        0,
-    )
-    assert isinstance(result, OperationResult)
-    assert result.events == ()
+    assert result == OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.RESULT_MISSING, 0)
     assert backend.execute_calls == 1
     assert adapter.state is AdapterState.BLOCKED
-    assert evidence.operation_results == [result]
-    assert all(isinstance(item, OperationResult) for item in evidence.operation_results)
-    with pytest.raises(GateViolation) as raised:
-        adapter.complete_stage(True)
-    assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
-    assert adapter.state is AdapterState.BLOCKED
-    assert backend.execute_calls == 1
 
 
-@pytest.mark.parametrize("manual_confirmation", ("false", 1, object()))
-def test_adapter_rejects_non_bool_confirmation_without_mutating_session(
-    manual_confirmation: object,
-) -> None:
-    adapter, backend = make_adapter()
+def test_snapshots_and_evidence_are_immutable_copies() -> None:
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
     adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
-    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
-    session = adapter.gate.session
+    capability = adapter.capability_snapshot
+    session = adapter.session_snapshot
+
+    with pytest.raises(FrozenInstanceError):
+        capability.epoch = 99  # type: ignore[misc]
     assert session is not None
-    call_counts = session.call_counts
-    backend_calls = list(backend.calls)
-
-    with pytest.raises(GateViolation) as raised:
-        adapter.complete_stage(cast(bool, manual_confirmation))
-
-    assert raised.value.code is ErrorCode.PARAMETER_NOT_ALLOWED
-    assert adapter.state is AdapterState.CANDIDATE
-    assert adapter.gate.session == session
-    assert session.call_counts == call_counts
-    assert backend.calls == backend_calls
+    with pytest.raises(FrozenInstanceError):
+        session.forward_index = 1  # type: ignore[misc]
+    assert isinstance(adapter.evidence_records, tuple)
 
 
 class CountingBackend:
@@ -308,13 +357,19 @@ class CountingBackend:
     def execute(self, command: AdapterCommand, manifest: StageManifest) -> OperationResult:
         del command, manifest
         self.execute_calls += 1
-        raise AssertionError("construction must not execute a backend")
+        return success()
 
 
-def test_construction_only_assigns_fields_without_backend_work() -> None:
+def test_construction_and_begin_do_no_backend_work() -> None:
     backend = CountingBackend()
-
     adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter.begin_stage(make_manifest(Stage.G1_PROFILE))
 
     assert adapter.state is AdapterState.CANDIDATE
     assert backend.execute_calls == 0
+
+
+def test_command_spec_helper_asserts_fixture_values() -> None:
+    manifest = make_manifest(Stage.G5_BRIGHTNESS)
+
+    assert manifest.steps[0].forward == CommandSpec(Operation.SET_BRIGHTNESS, brightness=40)

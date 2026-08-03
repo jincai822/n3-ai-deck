@@ -7,8 +7,10 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from functools import cache
 from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,6 +22,7 @@ from streamdock_n3.hardware.contracts import (
     MAX_IMAGE_BYTES,
     AdapterCommand,
     AdapterState,
+    CapabilitySnapshot,
     CommandSpec,
     CommandStep,
     DeviceProfile,
@@ -32,6 +35,7 @@ from streamdock_n3.hardware.contracts import (
     ResultStatus,
     Stage,
     StageManifest,
+    StagePhase,
 )
 from streamdock_n3.hardware.ipc import (
     MAX_REQUEST_BYTES,
@@ -55,10 +59,74 @@ from tests.hardware_fixtures import (
 def valid_request() -> IpcRequest:
     return IpcRequest(
         profile=make_profile(),
-        state=AdapterState.PROFILE_APPROVED,
-        manifest=make_manifest(Stage.G3_INPUT),
-        command=AdapterCommand(Operation.OBSERVE_INPUTS),
+        capability=CapabilitySnapshot(
+            AdapterState.CANDIDATE,
+            None,
+            None,
+            None,
+            1,
+            Stage.G1_PROFILE,
+            StagePhase.FORWARD,
+        ),
+        manifest=make_manifest(Stage.G1_PROFILE),
+        step_index=0,
+        command=AdapterCommand(Operation.APPROVE_PROFILE),
     )
+
+
+def test_request_contains_snapshot_and_no_authority_token() -> None:
+    wire = json.loads(encode_request(valid_request()))
+
+    assert set(wire) == {
+        "schema_version",
+        "profile",
+        "capability",
+        "manifest",
+        "step_index",
+        "command",
+    }
+    assert set(wire["capability"]) == {
+        "state",
+        "profile_digest",
+        "bcd_device",
+        "interface",
+        "epoch",
+        "stage",
+        "phase",
+    }
+    assert "reservation" not in encode_request(valid_request())
+    assert decode_request(encode_request(valid_request())) == valid_request()
+
+
+def test_fake_helper_call_uses_literal_isolated_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(argv)
+        result = OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 0)
+        return subprocess.CompletedProcess(argv, 0, encode_response(result) + "\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_fake_helper(valid_request(), 100).succeeded
+    assert calls == [[sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"]]
+
+
+def test_helper_ignores_cwd_and_pythonpath_shadow_packages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shadow = tmp_path / "streamdock_n3" / "hardware"
+    shadow.mkdir(parents=True)
+    (shadow / "__init__.py").write_text("", encoding="utf-8")
+    (shadow / "helper_main.py").write_text(
+        "raise SystemExit('shadow-helper-executed')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+
+    assert run_fake_helper(valid_request(), 5_000).succeeded
 
 
 @cache
@@ -83,7 +151,7 @@ def payload_limit_request() -> IpcRequest:
                 image_sha256=sha256(f"filler-{index}".encode()).hexdigest(),
             )
         )
-        for index in range(608)
+        for index in range(606)
     )
     manifest = StageManifest(
         Stage.G6_ONE_LCD,
@@ -92,14 +160,23 @@ def payload_limit_request() -> IpcRequest:
         TEST_INTERFACE,
         tuple(steps),
         600_000,
-        "x" * 71,
-        "x",
+        "x" * 128,
+        "x" * 23,
         "x",
     )
     request = IpcRequest(
         profile,
-        AdapterState.BRIGHTNESS_VALIDATED,
+        CapabilitySnapshot(
+            AdapterState.BRIGHTNESS_VALIDATED,
+            profile.digest(),
+            profile.bcd_device,
+            profile.interface,
+            8,
+            Stage.G6_ONE_LCD,
+            StagePhase.FORWARD,
+        ),
         manifest,
+        0,
         command,
     )
 
@@ -129,8 +206,9 @@ def test_ipc_request_rejects_non_integer_schema_version() -> None:
     with pytest.raises(ValueError):
         IpcRequest(
             request.profile,
-            request.state,
+            request.capability,
             request.manifest,
+            request.step_index,
             request.command,
             schema_version=1.0,  # type: ignore[arg-type]
         )
@@ -168,7 +246,14 @@ def test_request_uses_closed_canonical_schema() -> None:
     wire = json.loads(encoded)
 
     assert encoded == json.dumps(wire, sort_keys=True, separators=(",", ":"))
-    assert set(wire) == {"schema_version", "profile", "state", "manifest", "command"}
+    assert set(wire) == {
+        "schema_version",
+        "profile",
+        "capability",
+        "manifest",
+        "step_index",
+        "command",
+    }
     assert set(wire["profile"]) == {
         "schema_version",
         "vid",
@@ -184,6 +269,15 @@ def test_request_uses_closed_canonical_schema() -> None:
         "class",
         "subclass",
         "protocol",
+    }
+    assert set(wire["capability"]) == {
+        "state",
+        "profile_digest",
+        "bcd_device",
+        "interface",
+        "epoch",
+        "stage",
+        "phase",
     }
     assert set(wire["manifest"]) == {
         "schema_version",
@@ -212,7 +306,7 @@ def test_request_uses_closed_canonical_schema() -> None:
     }
     assert set(wire["command"]) == {"operation", "brightness", "key", "image_base64"}
     assert wire["command"] == {
-        "operation": Operation.OBSERVE_INPUTS.value,
+        "operation": Operation.APPROVE_PROFILE.value,
         "brightness": None,
         "key": None,
         "image_base64": None,
@@ -266,12 +360,14 @@ def _add(path: tuple[str | int, ...]) -> RequestMutation:
 @pytest.mark.parametrize(
     "mutate",
     (
-        _remove((), "state"),
+        _remove((), "capability"),
         _add(()),
         _remove(("profile",), "vid"),
         _add(("profile",)),
         _remove(("profile", "interface"), "number"),
         _add(("profile", "interface")),
+        _remove(("capability",), "epoch"),
+        _add(("capability",)),
         _remove(("manifest",), "stage"),
         _add(("manifest",)),
         _remove(("manifest", "interface"), "number"),
@@ -291,8 +387,8 @@ def test_request_rejects_missing_and_extra_keys(mutate: RequestMutation) -> None
 
 def test_request_rejects_duplicate_keys() -> None:
     encoded = encode_request(valid_request()).replace(
-        '"state":"profile_approved"',
-        '"state":"candidate","state":"profile_approved"',
+        '"state":"candidate"',
+        '"state":"profile_approved","state":"candidate"',
         1,
     )
 
@@ -336,7 +432,23 @@ def test_response_rejects_duplicate_keys() -> None:
 @pytest.mark.parametrize("state", tuple(AdapterState))
 def test_all_adapter_states_round_trip(state: AdapterState) -> None:
     request = valid_request()
-    request = IpcRequest(request.profile, state, request.manifest, request.command)
+    pinned = state is not AdapterState.CANDIDATE
+    capability = CapabilitySnapshot(
+        state,
+        request.profile.digest() if pinned else None,
+        request.profile.bcd_device if pinned else None,
+        request.profile.interface if pinned else None,
+        1,
+        request.manifest.stage,
+        StagePhase.FORWARD,
+    )
+    request = IpcRequest(
+        request.profile,
+        capability,
+        request.manifest,
+        request.step_index,
+        request.command,
+    )
 
     assert decode_request(encode_request(request)) == request
 
@@ -360,8 +472,9 @@ def test_all_profile_enums_round_trip(
     manifest = make_manifest(Stage.G3_INPUT)
     request = IpcRequest(
         profile,
-        AdapterState.PROFILE_APPROVED,
+        valid_request().capability,
         manifest,
+        0,
         AdapterCommand(Operation.OBSERVE_INPUTS),
     )
 
@@ -374,7 +487,13 @@ def test_all_profile_enums_round_trip(
 def test_all_manifest_stages_round_trip(stage: Stage) -> None:
     request = valid_request()
     manifest = make_manifest(stage)
-    request = IpcRequest(request.profile, request.state, manifest, request.command)
+    request = IpcRequest(
+        request.profile,
+        replace(request.capability, stage=stage),
+        manifest,
+        request.step_index,
+        request.command,
+    )
 
     assert decode_request(encode_request(request)) == request
 
@@ -394,7 +513,13 @@ def test_all_manifest_stages_round_trip(stage: Stage) -> None:
 )
 def test_all_operations_brightness_and_image_round_trip(command: AdapterCommand) -> None:
     request = valid_request()
-    request = IpcRequest(request.profile, request.state, request.manifest, command)
+    request = IpcRequest(
+        request.profile,
+        request.capability,
+        request.manifest,
+        request.step_index,
+        command,
+    )
 
     wire = request_object(request)
     decoded = decode_request(encode_request(request))
@@ -450,7 +575,8 @@ def test_all_normalized_events_round_trip() -> None:
     ("path", "bad_value"),
     (
         (("schema_version",), 2),
-        (("state",), "new_state"),
+        (("capability", "state"), "new_state"),
+        (("capability", "phase"), "new_phase"),
         (("profile", "identity_status"), "trusted"),
         (("profile", "protocol_status"), "known"),
         (("manifest", "stage"), "g8_live"),
@@ -502,6 +628,8 @@ def test_response_rejects_unknown_versions_and_enums(
     "path",
     (
         ("schema_version",),
+        ("capability", "epoch"),
+        ("step_index",),
         ("manifest", "deadline_ms"),
     ),
 )
@@ -548,7 +676,15 @@ def test_request_rejects_hex_fields_without_exact_four_digit_shape(bad_hex: str)
 def test_request_rejects_invalid_base64() -> None:
     request = valid_request()
     command = AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=TEST_IMAGE)
-    wire = request_object(IpcRequest(request.profile, request.state, request.manifest, command))
+    wire = request_object(
+        IpcRequest(
+            request.profile,
+            request.capability,
+            request.manifest,
+            request.step_index,
+            command,
+        )
+    )
     wire["command"]["image_base64"] = "not+canonical/base64==="
 
     with pytest.raises(ValueError, match="^invalid_ipc_request$"):
@@ -633,7 +769,12 @@ def test_fake_helper_call_is_closed_and_bounded(monkeypatch: pytest.MonkeyPatch)
     result = run_fake_helper(valid_request(), timeout_ms=2_000)
 
     assert result.succeeded is True
-    assert recorded["argv"] == [sys.executable, "-m", "streamdock_n3.hardware.helper_main"]
+    assert recorded["argv"] == [
+        sys.executable,
+        "-I",
+        "-m",
+        "streamdock_n3.hardware.helper_main",
+    ]
     assert recorded.get("shell", False) is False
     assert recorded["check"] is False
     assert recorded["capture_output"] is True

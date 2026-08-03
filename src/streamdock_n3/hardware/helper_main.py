@@ -6,7 +6,7 @@ import sys
 
 from streamdock_n3.hardware.backend import FakeBackend
 from streamdock_n3.hardware.contracts import ErrorCode, OperationResult, ResultStatus
-from streamdock_n3.hardware.gate import CapabilityGate, GateViolation
+from streamdock_n3.hardware.gate import CommandPolicy, GateViolation
 from streamdock_n3.hardware.ipc import (
     MAX_FRAMED_REQUEST_BYTES,
     REQUEST_READ_BYTES,
@@ -27,13 +27,14 @@ def _handle_request() -> OperationResult:
         raise ValueError
 
     request = decode_request(payload)
-    gate = CapabilityGate(request.state)
-    backend = FakeBackend()
-    gate.begin(request.profile, request.manifest, request.profile.source_commit)
-    gate.authorize(request.command)
-    result = backend.execute(request.command, request.manifest)
-    gate.record_result(result)
-    return result
+    CommandPolicy.validate(
+        request.profile,
+        request.capability,
+        request.manifest,
+        request.step_index,
+        request.command,
+    )
+    return FakeBackend().execute(request.command, request.manifest)
 
 
 def main() -> int:
