@@ -49,7 +49,7 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "44ac848e972c525064456f613ba3a2ede40ee3ed4b6aebb921bd26c29251d701"
+        "1a281b989b231263b60e566013f3bcb1e6859e654091b23db0d64f850d9cde03"
     ),
     Path("src/streamdock_n3/hardware/input_session.py"): (
         "ef78b5eeadc18dcf0693089753f58326bf36bff6148fafa58af3cbb395f4188d"
@@ -61,22 +61,22 @@ REVIEWED_SOURCE_SHA256 = {
         "bfb07fdf9bada8fa796699b37aba07cc3d684a192554963788ab543f3303e32a"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "64f7bd4f23fc4617ee0dd824013db4713937dd1e4bb9ef116b3a631aedc51385"
+        "0d87d1d703d86a1b79f045c71a9e79a3d091c32d38aebff03e1fbfa079948e6f"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "5dd4e349de72fb2d8963c8c5444ebb87acf776811812ac011e1bcfb444a9d14d"
+        "a20a151f6572c7de3b75a250c43d3faeac30796f1958e950a9a7bae6f56e4909"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "60c16275e6e87d7a0542a927e4c6e31b04dfa20fc78488b06d8daf242af9efc5"
+        "9263a1e2c2f09d398a8084bc3ab85c62b7557a90cc95930f0d4f7c0f45c52450"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
         "2166e04f94b564e465fb4d3608def19312fb7223ca60a8686e88e6a2ea360ef2"
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
-        "38b6996b3a90af16a38aef0c4abebc0259fc5b4c33bb57ee6c058ff00abff0d6"
+        "5c161f09172264bac669fab49764e5775b27dd6d34ed8a52fb5e1f6d6bc150d9"
     ),
     Path("src/streamdock_n3/__init__.py"): (
         "0612dae9f893b0736b2bbc584afc2fa001e4e7468ab622a9e0061453f5b4d04b"
@@ -1628,7 +1628,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         for node in tree.body
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
     }
-    assert declared - {"Backend", "EvidenceSink", "ReadOnlyInputBackend"} == constructed
+    assert declared - {"Backend", "EvidenceSink", "ReadOnlyInputBackend", "SessionRunner"} == constructed
     assert calls == []
 
     helper_result = ipc.run_fake_helper(request, timeout_ms=1_000)

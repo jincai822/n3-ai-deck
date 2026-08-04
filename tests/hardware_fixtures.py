@@ -5,10 +5,17 @@ from streamdock_n3.hardware.contracts import (
     AdapterCommand,
     CommandSpec,
     CommandStep,
+    ControlCount,
+    ControlMapping,
     DeviceProfile,
     HidInterface,
+    InputAction,
+    InputKind,
+    InputSessionResult,
     InputSessionSpec,
     InterfaceRoleResolution,
+    KeyMap,
+    KeyMapEntry,
     Operation,
     PermissionPlan,
     Stage,
@@ -84,6 +91,52 @@ def make_g2_manifest() -> StageManifest:
         Stage.G2_PERMISSION,
         role_resolution=make_resolved_roles(),
         permission_plan=make_g2_plan(),
+    )
+
+
+def make_session_spec() -> InputSessionSpec:
+    return InputSessionSpec(
+        duration_ms=600_000,
+        expected_press_count=10,
+        expected_rotation_count=20,
+        latency_p95_target_ms=250,
+        disconnect_grace_ms=2_000,
+        key_map=KeyMap(
+            (
+                KeyMapEntry(1, 30, 1, InputKind.BUTTON, InputAction.PRESS),
+                KeyMapEntry(1, 31, 2, InputKind.BUTTON, InputAction.PRESS),
+                KeyMapEntry(3, 8, 1, InputKind.KNOB_ROTATE, InputAction.LEFT),
+                KeyMapEntry(3, 9, 1, InputKind.KNOB_PRESS, InputAction.PRESS),
+            )
+        ),
+    )
+
+
+def make_g3_manifest() -> StageManifest:
+    return make_manifest(
+        Stage.G3_INPUT,
+        role_resolution=make_resolved_roles(),
+        session_spec=make_session_spec(),
+    )
+
+
+def meeting_session_result() -> InputSessionResult:
+    return InputSessionResult(
+        counts=(
+            ControlCount(1, InputKind.BUTTON, 10, 10, 0, 0),
+            ControlCount(2, InputKind.BUTTON, 10, 10, 0, 0),
+            ControlCount(1, InputKind.KNOB_ROTATE, 0, 0, 20, 20),
+            ControlCount(1, InputKind.KNOB_PRESS, 10, 10, 0, 0),
+        ),
+        latency_p95_ms=100,
+        unknown_count=0,
+        disconnected=False,
+        mapping=(
+            ControlMapping(1, InputKind.BUTTON, 1, 30),
+            ControlMapping(2, InputKind.BUTTON, 1, 31),
+            ControlMapping(1, InputKind.KNOB_ROTATE, 3, 8),
+            ControlMapping(1, InputKind.KNOB_PRESS, 3, 9),
+        ),
     )
 
 

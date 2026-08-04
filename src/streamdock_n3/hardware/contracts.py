@@ -893,6 +893,7 @@ class OperationResult:
     error_code: ErrorCode
     duration_ms: int
     events: tuple[NormalizedInputEvent, ...] = ()
+    session: InputSessionResult | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.status, ResultStatus):
@@ -904,6 +905,13 @@ class OperationResult:
             isinstance(event, NormalizedInputEvent) for event in self.events
         ):
             raise TypeError("events must be a tuple of NormalizedInputEvent values")
+        if self.session is not None and not isinstance(self.session, InputSessionResult):
+            raise TypeError("session must be an InputSessionResult or None")
+        if self.session is not None and self.status not in (
+            ResultStatus.SUCCEEDED,
+            ResultStatus.DISCONNECTED,
+        ):
+            raise ValueError("session results require SUCCEEDED or DISCONNECTED status")
         if (self.status is ResultStatus.SUCCEEDED) != (self.error_code is ErrorCode.NONE):
             raise ValueError("succeeded results require NONE and other results require an error")
 

@@ -12,6 +12,7 @@ from streamdock_n3.hardware.contracts import (
     AdapterState,
     CommandSpec,
     ErrorCode,
+    InputSessionResult,
     Operation,
     OperationResult,
     ResultStatus,
@@ -22,19 +23,23 @@ from streamdock_n3.hardware.evidence import (
     EvidenceDisposition,
     EvidenceKind,
     EvidenceRecord,
+    EvidenceSink,
 )
 from streamdock_n3.hardware.gate import GateViolation
+from streamdock_n3.hardware.ipc import IpcSessionRequest, IpcSessionResponse
 from tests.hardware_fixtures import (
     TEST_COMMIT,
     TEST_IMAGE,
     make_g1_manifest,
     make_g2_manifest,
     make_g2_plan,
+    make_g3_manifest,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
     make_resolved_roles,
     make_swapped_roles,
+    meeting_session_result,
 )
 
 STAGES = (
@@ -93,6 +98,8 @@ def hardware_manifest(stage: Stage) -> StageManifest:
         return make_g1_manifest()
     if stage is Stage.G2_PERMISSION:
         return make_g2_manifest()
+    if stage is Stage.G3_INPUT:
+        return make_g3_manifest()
     return make_manifest(stage, role_resolution=make_resolved_roles())
 
 
@@ -105,8 +112,41 @@ def complete_stage(adapter: N3Adapter, stage: Stage) -> AdapterState:
     return adapter.complete_stage(True, True if recovery_commands(stage) else None)
 
 
+class FakeSessionRunner:
+    def __init__(self, result: InputSessionResult | None = None) -> None:
+        self.result = result if result is not None else meeting_session_result()
+        self.calls = 0
+
+    def run(self, request: IpcSessionRequest, timeout_ms: int) -> IpcSessionResponse:
+        self.calls += 1
+        return IpcSessionResponse(
+            OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, timeout_ms),
+            self.result,
+        )
+
+
+def make_test_adapter(
+    backend: FakeBackend,
+    external_evidence: EvidenceSink | None = None,
+) -> N3Adapter:
+    return N3Adapter(
+        make_profile(),
+        TEST_COMMIT,
+        backend,
+        external_evidence,
+        session_runner=FakeSessionRunner(),
+        input_node="/dev/input/event12",
+    )
+
+
 def adapter_advanced_to(stage: Stage, backend: FakeBackend) -> N3Adapter:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = N3Adapter(
+        make_profile(),
+        TEST_COMMIT,
+        backend,
+        session_runner=FakeSessionRunner(),
+        input_node="/dev/input/event12",
+    )
     for current in STAGES:
         if current is stage:
             break
@@ -115,7 +155,7 @@ def adapter_advanced_to(stage: Stage, backend: FakeBackend) -> N3Adapter:
 
 
 def test_adapter_has_no_live_gate_or_arbitrary_initial_state() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+    adapter = make_test_adapter(FakeBackend())
 
     assert adapter.state is AdapterState.CANDIDATE
     assert not hasattr(adapter, "gate")
@@ -133,7 +173,7 @@ def test_adapter_has_no_live_gate_or_arbitrary_initial_state() -> None:
 
 def test_complete_without_backend_result_cannot_advance() -> None:
     backend = FakeBackend()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
     adapter.begin_stage(make_g1_manifest())
 
     with pytest.raises(GateViolation) as raised:
@@ -146,7 +186,7 @@ def test_complete_without_backend_result_cannot_advance() -> None:
 
 def test_execute_before_begin_is_rejected_without_backend_call() -> None:
     backend = FakeBackend()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
 
     with pytest.raises(GateViolation) as raised:
         adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -157,14 +197,14 @@ def test_execute_before_begin_is_rejected_without_backend_call() -> None:
 
 def test_adapter_advances_g1_to_g7_with_ordered_recovery() -> None:
     backend = FakeBackend()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
 
     for stage in STAGES:
         complete_stage(adapter, stage)
 
     assert adapter.state is AdapterState.SIX_LCD_VALIDATED
     assert adapter.session_snapshot is None
-    assert len(backend.calls) == 20
+    assert len(backend.calls) == 19
 
 
 def test_wrong_order_never_reaches_backend() -> None:
@@ -181,7 +221,7 @@ def test_wrong_order_never_reaches_backend() -> None:
 
 
 def test_g7_failure_cancels_forward_and_allows_only_lifo_recovery() -> None:
-    prior_stage_results = (success(),) * 8
+    prior_stage_results = (success(),) * 7
     backend = FakeBackend(
         scripted_results=prior_stage_results
         + (success(), success(), backend_failure(), success(), success())
@@ -204,7 +244,7 @@ def test_g7_failure_cancels_forward_and_allows_only_lifo_recovery() -> None:
 
 
 def test_recovery_failure_stops_remaining_recovery_and_never_advances() -> None:
-    prior_stage_results = (success(),) * 8
+    prior_stage_results = (success(),) * 7
     backend = FakeBackend(
         scripted_results=prior_stage_results + (success(), success(), backend_failure())
     )
@@ -235,7 +275,7 @@ def test_backend_disconnect_is_disconnected_and_never_recovers() -> None:
         0,
     )
     backend = FakeBackend(scripted_results=(disconnected,))
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
     adapter.begin_stage(make_g1_manifest())
 
     assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)) == disconnected
@@ -283,9 +323,9 @@ def test_disconnect_survives_evidence_failure_after_earned_g7_recovery(
         ErrorCode.DEVICE_DISCONNECTED,
         0,
     )
-    backend = FakeBackend(scripted_results=(success(),) * 10 + (disconnected,))
+    backend = FakeBackend(scripted_results=(success(),) * 9 + (disconnected,))
     sink = sink_type()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend, sink)
+    adapter = make_test_adapter(backend, external_evidence=sink)
     for stage in STAGES:
         if stage is Stage.G7_SIX_LCD:
             break
@@ -319,7 +359,7 @@ def test_disconnect_survives_evidence_failure_after_earned_g7_recovery(
 
 
 def test_throwing_sink_blocks_before_operation_or_stage_advancement() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), ThrowingSink())
+    adapter = make_test_adapter(FakeBackend(), ThrowingSink())
     adapter.begin_stage(make_g1_manifest())
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -344,7 +384,7 @@ class GateViolationSink:
 
 def test_callback_gate_violation_none_normalizes_and_finalizes_operation_evidence() -> None:
     sink = GateViolationSink(ErrorCode.NONE)
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter = make_test_adapter(FakeBackend(), sink)
     adapter.begin_stage(make_g1_manifest())
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -369,7 +409,7 @@ class SecondWriteThrowingSink:
 
 def test_stage_sink_failure_occurs_before_profile_commit() -> None:
     sink = SecondWriteThrowingSink()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter = make_test_adapter(FakeBackend(), sink)
     adapter.begin_stage(make_g1_manifest())
     assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
 
@@ -387,7 +427,7 @@ def test_callback_gate_violation_normalizes_without_masking_evidence_failure(
     callback_code: ErrorCode,
 ) -> None:
     sink = GateViolationSink(callback_code, fail_on_call=2)
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter = make_test_adapter(FakeBackend(), sink)
     adapter.begin_stage(make_g1_manifest())
     assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
 
@@ -417,7 +457,7 @@ class ReentrantSink:
 
 def test_caught_reentrant_sink_violation_still_blocks_commit() -> None:
     sink = ReentrantSink()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter = make_test_adapter(FakeBackend(), sink)
     sink.adapter = adapter
     adapter.begin_stage(make_g1_manifest())
     adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -437,7 +477,7 @@ class ExplodingBackend:
 
 
 def test_backend_exception_is_sanitized_without_retry() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, ExplodingBackend())
+    adapter = make_test_adapter(ExplodingBackend())
     adapter.begin_stage(make_g1_manifest())
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -463,7 +503,7 @@ class MaliciousBackend:
 
 def test_non_contract_backend_result_is_normalized_without_retry() -> None:
     backend = MaliciousBackend()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
     adapter.begin_stage(make_g1_manifest())
 
     result = adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
@@ -474,7 +514,7 @@ def test_non_contract_backend_result_is_normalized_without_retry() -> None:
 
 
 def test_snapshots_and_evidence_are_immutable_copies() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+    adapter = make_test_adapter(FakeBackend())
     adapter.begin_stage(make_g1_manifest())
     capability = adapter.capability_snapshot
     session = adapter.session_snapshot
@@ -499,7 +539,7 @@ class CountingBackend:
 
 def test_construction_and_begin_do_no_backend_work() -> None:
     backend = CountingBackend()
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, backend)
+    adapter = make_test_adapter(backend)
     adapter.begin_stage(make_g1_manifest())
 
     assert adapter.state is AdapterState.CANDIDATE
@@ -513,7 +553,7 @@ def test_command_spec_helper_asserts_fixture_values() -> None:
 
 
 def test_g1_approval_pins_approved_profile_with_roles() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+    adapter = make_test_adapter(FakeBackend())
     adapter.begin_stage(make_g1_manifest())
     assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
     assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
@@ -535,7 +575,7 @@ def test_g1_approval_pins_approved_profile_with_roles() -> None:
 
 
 def test_g1_without_role_resolution_rejects_and_stays_candidate() -> None:
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+    adapter = make_test_adapter(FakeBackend())
 
     with pytest.raises(GateViolation) as raised:
         adapter.begin_stage(make_incomplete_g1_manifest())
@@ -584,7 +624,7 @@ def test_g2_missing_plan_rejects_at_begin_stage() -> None:
 
 def test_g2_throwing_sink_blocks_permission_record() -> None:
     sink = GateViolationSink(ErrorCode.NONE, fail_on_call=4)
-    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter = make_test_adapter(FakeBackend(), sink)
     adapter.begin_stage(make_g1_manifest())
     assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
     assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
@@ -598,3 +638,68 @@ def test_g2_throwing_sink_blocks_permission_record() -> None:
     assert adapter.state is AdapterState.BLOCKED
     failed = adapter.evidence_records[-1]
     assert failed.disposition is EvidenceDisposition.FAILED
+
+
+def test_g3_approval_records_input_session_evidence() -> None:
+    backend = FakeBackend()
+    adapter = make_test_adapter(backend)
+    adapter.begin_stage(make_g1_manifest())
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+    adapter.begin_stage(make_g2_manifest())
+    assert adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+
+    adapter.begin_stage(make_g3_manifest())
+    result = adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS))
+    assert result.succeeded is True
+    assert result.session is not None
+    assert adapter.complete_stage(True) is AdapterState.INPUT_VALIDATED
+
+    approval = adapter.evidence_records[-1]
+    assert approval.kind is EvidenceKind.INPUT_SESSION
+    assert approval.disposition is EvidenceDisposition.COMMITTED
+    assert approval.session_disconnected is False
+    assert approval.session_latency_p95_ms == 100
+    assert adapter.state is AdapterState.INPUT_VALIDATED
+
+
+def test_g3_missing_input_node_rejects() -> None:
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend())
+    adapter.begin_stage(make_g1_manifest())
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+    adapter.begin_stage(make_g2_manifest())
+    assert adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+
+    adapter.begin_stage(make_g3_manifest())
+    result = adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS))
+
+    assert result.error_code is ErrorCode.INPUT_SESSION_INVALID
+    assert adapter.state is AdapterState.BLOCKED
+
+
+def test_g3_session_runner_is_called_exactly_once() -> None:
+    backend = FakeBackend()
+    runner = FakeSessionRunner()
+    adapter = N3Adapter(
+        make_profile(),
+        TEST_COMMIT,
+        backend,
+        session_runner=runner,
+        input_node="/dev/input/event12",
+    )
+    adapter.begin_stage(make_g1_manifest())
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+    adapter.begin_stage(make_g2_manifest())
+    assert adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+
+    calls_before = len(backend.calls)
+    adapter.begin_stage(make_g3_manifest())
+    assert adapter.execute(AdapterCommand(Operation.OBSERVE_INPUTS)).succeeded
+    assert runner.calls == 1
+    assert len(backend.calls) == calls_before
+    assert adapter.complete_stage(True) is AdapterState.INPUT_VALIDATED

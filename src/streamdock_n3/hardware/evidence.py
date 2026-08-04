@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from hashlib import sha256
 from typing import Protocol
 
 from streamdock_n3.hardware.contracts import (
@@ -14,6 +15,7 @@ from streamdock_n3.hardware.contracts import (
     DeviceProfile,
     ErrorCode,
     HidInterface,
+    InputSessionResult,
     Operation,
     OperationResult,
     RecoveryStatus,
@@ -34,6 +36,7 @@ class EvidenceKind(StrEnum):
     STAGE = "stage"
     PROFILE_APPROVAL = "profile_approval"
     PERMISSION_APPROVAL = "permission_approval"
+    INPUT_SESSION = "input_session"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +64,11 @@ class EvidenceRecord:
     recovery_status: RecoveryStatus | None
     role_resolution_digest: str | None = None
     permission_plan_digest: str | None = None
+    session_latency_p95_ms: int | None = None
+    session_unknown_count: int | None = None
+    session_disconnected: bool | None = None
+    session_counts_digest: str | None = None
+    session_mapping_digest: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -150,6 +158,44 @@ class EvidenceRecord:
                 raise ValueError("permission approval evidence requires PROFILE_APPROVED state")
             if self.recovery_status is not RecoveryStatus.NOT_REQUIRED:
                 raise ValueError("permission approval evidence requires NOT_REQUIRED recovery")
+        elif self.kind is EvidenceKind.INPUT_SESSION:
+            if any(
+                value is not None
+                for value in (
+                    self.operation,
+                    self.brightness,
+                    self.key,
+                    self.adapter_state,
+                    self.recovery_status,
+                )
+            ):
+                raise ValueError("input session evidence cannot include operation outcome")
+            if self.error_code is not None and not isinstance(self.error_code, ErrorCode):
+                raise TypeError("error_code must be an ErrorCode or None")
+            if self.payload_size:
+                raise ValueError("input session evidence payload must be zero")
+            if not isinstance(self.status, ResultStatus):
+                raise TypeError("input session evidence requires a ResultStatus")
+            if (
+                not isinstance(self.session_latency_p95_ms, int)
+                or self.session_latency_p95_ms < 0
+                or isinstance(self.session_latency_p95_ms, bool)
+            ):
+                raise ValueError("input session evidence requires a latency p95")
+            if (
+                not isinstance(self.session_unknown_count, int)
+                or self.session_unknown_count < 0
+                or isinstance(self.session_unknown_count, bool)
+            ):
+                raise ValueError("input session evidence requires an unknown count")
+            if not isinstance(self.session_disconnected, bool):
+                raise TypeError("input session evidence requires a disconnect flag")
+            for digest, field in (
+                (self.session_counts_digest, "session_counts_digest"),
+                (self.session_mapping_digest, "session_mapping_digest"),
+            ):
+                if not isinstance(digest, str) or len(digest) != 64:
+                    raise ValueError(f"input session evidence requires a {field}")
         else:
             if self.role_resolution_digest is not None:
                 raise ValueError("role_resolution_digest only applies to profile approval")
@@ -201,6 +247,11 @@ class EvidenceRecord:
             ),
             "role_resolution_digest": self.role_resolution_digest,
             "permission_plan_digest": self.permission_plan_digest,
+            "session_latency_p95_ms": self.session_latency_p95_ms,
+            "session_unknown_count": self.session_unknown_count,
+            "session_disconnected": self.session_disconnected,
+            "session_counts_digest": self.session_counts_digest,
+            "session_mapping_digest": self.session_mapping_digest,
         }
 
 
@@ -214,6 +265,13 @@ class _EvidenceToken:
     index: int
     epoch: int
     kind: EvidenceKind
+
+
+def _canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
 
 
 class EvidenceRecorder:
@@ -401,4 +459,69 @@ def permission_approval_evidence(
         adapter_state=AdapterState.PROFILE_APPROVED,
         recovery_status=RecoveryStatus.NOT_REQUIRED,
         permission_plan_digest=plan.digest(),
+    )
+
+
+def input_session_evidence(
+    profile: DeviceProfile,
+    manifest: StageManifest,
+    result: InputSessionResult,
+    status: ResultStatus,
+    error_code: ErrorCode,
+    duration_ms: int,
+    epoch: int,
+    event_count: int = 0,
+) -> EvidenceRecord:
+    if not isinstance(result, InputSessionResult):
+        raise TypeError("result must be an InputSessionResult")
+    counts_digest = _canonical_digest(
+        [
+            {
+                "control_id": count.control_id,
+                "kind": count.kind.value,
+                "press_count": count.press_count,
+                "release_count": count.release_count,
+                "left_count": count.left_count,
+                "right_count": count.right_count,
+            }
+            for count in result.counts
+        ]
+    )
+    return EvidenceRecord(
+        schema_version=SCHEMA_VERSION,
+        kind=EvidenceKind.INPUT_SESSION,
+        disposition=EvidenceDisposition.ATTEMPT,
+        epoch=epoch,
+        stage=manifest.stage,
+        commit=manifest.commit,
+        profile_digest=profile.digest(),
+        interface=manifest.interface,
+        operation=None,
+        brightness=None,
+        key=None,
+        payload_size=0,
+        status=status,
+        error_code=error_code,
+        duration_ms=duration_ms,
+        event_count=event_count,
+        expected_result=manifest.expected_result,
+        recovery_plan=manifest.recovery_plan,
+        approval_reference=manifest.approval_reference,
+        adapter_state=None,
+        recovery_status=None,
+        session_latency_p95_ms=result.latency_p95_ms,
+        session_unknown_count=result.unknown_count,
+        session_disconnected=result.disconnected,
+        session_counts_digest=counts_digest,
+        session_mapping_digest=_canonical_digest(
+            [
+                {
+                    "control_id": item.control_id,
+                    "kind": item.kind.value,
+                    "event_type": item.event_type,
+                    "event_code": item.event_code,
+                }
+                for item in result.mapping
+            ]
+        ),
     )

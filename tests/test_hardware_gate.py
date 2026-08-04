@@ -34,11 +34,13 @@ from tests.hardware_fixtures import (
     make_g1_manifest,
     make_g2_manifest,
     make_g2_plan,
+    make_g3_manifest,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
     make_resolved_roles,
     make_swapped_roles,
+    meeting_session_result,
 )
 
 
@@ -87,6 +89,8 @@ def hardware_manifest(stage: Stage) -> StageManifest:
         return make_g1_manifest()
     if stage is Stage.G2_PERMISSION:
         return make_g2_manifest()
+    if stage is Stage.G3_INPUT:
+        return make_g3_manifest()
     return make_manifest(stage, role_resolution=make_resolved_roles())
 
 
@@ -94,7 +98,18 @@ def complete_stage(gate: _CapabilityGate, stage: Stage) -> AdapterState:
     gate.begin(make_profile(), hardware_manifest(stage), TEST_COMMIT)
     for command in forward_commands(stage):
         reservation = gate.reserve_forward(command)
-        gate.settle(reservation, success())
+        if stage is Stage.G3_INPUT:
+            gate.settle(
+                reservation,
+                OperationResult(
+                    ResultStatus.SUCCEEDED,
+                    ErrorCode.NONE,
+                    0,
+                    session=meeting_session_result(),
+                ),
+            )
+        else:
+            gate.settle(reservation, success())
     for command in recovery_commands(stage):
         reservation = gate.reserve_recovery(command)
         gate.settle(reservation, success())
@@ -592,3 +607,55 @@ def test_command_policy_rejects_state_that_cannot_source_stage(
         CommandPolicy.validate(profile, capability, make_manifest(stage), 0, command)
 
     assert raised.value.code is ErrorCode.STATE_NOT_ALLOWED
+
+
+def test_g3_begin_rejects_missing_session_spec() -> None:
+    gate = advance_through_g1()
+    gate.begin(make_profile(), make_g2_manifest(), TEST_COMMIT)
+    reservation = gate.reserve_forward(AdapterCommand(Operation.RECORD_PERMISSION))
+    gate.settle(reservation, success())
+    gate.commit(gate.preview_completion(True, None), lambda: None)
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(
+            make_profile(),
+            make_manifest(Stage.G3_INPUT, role_resolution=make_resolved_roles()),
+            TEST_COMMIT,
+        )
+
+    assert raised.value.code is ErrorCode.INPUT_SESSION_INVALID
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_g3_requires_machine_backed_session_for_validation() -> None:
+    gate = advance_through_g1()
+    gate.begin(make_profile(), make_g2_manifest(), TEST_COMMIT)
+    reservation = gate.reserve_forward(AdapterCommand(Operation.RECORD_PERMISSION))
+    gate.settle(reservation, success())
+    gate.commit(gate.preview_completion(True, None), lambda: None)
+
+    gate.begin(make_profile(), make_g3_manifest(), TEST_COMMIT)
+    reservation = gate.reserve_forward(AdapterCommand(Operation.OBSERVE_INPUTS))
+    gate.settle(reservation, success())
+
+    preview = gate.preview_completion(True, None)
+    assert preview.next_state is AdapterState.BLOCKED
+
+    gate2 = advance_through_g1()
+    gate2.begin(make_profile(), make_g2_manifest(), TEST_COMMIT)
+    reservation = gate2.reserve_forward(AdapterCommand(Operation.RECORD_PERMISSION))
+    gate2.settle(reservation, success())
+    gate2.commit(gate2.preview_completion(True, None), lambda: None)
+    gate2.begin(make_profile(), make_g3_manifest(), TEST_COMMIT)
+    reservation = gate2.reserve_forward(AdapterCommand(Operation.OBSERVE_INPUTS))
+    gate2.settle(
+        reservation,
+        OperationResult(
+            ResultStatus.SUCCEEDED,
+            ErrorCode.NONE,
+            0,
+            session=meeting_session_result(),
+        ),
+    )
+    preview = gate2.preview_completion(True, None)
+    assert preview.next_state is AdapterState.INPUT_VALIDATED

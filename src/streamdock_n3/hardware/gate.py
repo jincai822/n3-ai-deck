@@ -15,6 +15,7 @@ from streamdock_n3.hardware.contracts import (
     DeviceProfile,
     ErrorCode,
     HidInterface,
+    InputSessionResult,
     InterfaceRoleResolution,
     Operation,
     OperationResult,
@@ -116,6 +117,7 @@ class _CapabilityGate:
         self._had_recovery = False
         self._recovery_machine_status = RecoveryStatus.NOT_REQUIRED
         self._committing = False
+        self._session_result: InputSessionResult | None = None
 
     @property
     def state(self) -> AdapterState:
@@ -124,6 +126,10 @@ class _CapabilityGate:
     @property
     def approved_roles(self) -> InterfaceRoleResolution | None:
         return self._approved_roles
+
+    @property
+    def session_result(self) -> InputSessionResult | None:
+        return self._session_result
 
     @property
     def capability_snapshot(self) -> CapabilitySnapshot:
@@ -199,6 +205,11 @@ class _CapabilityGate:
             } != {"input", "hidraw"}:
                 self._block_and_clear()
                 raise GateViolation(ErrorCode.PERMISSION_PLAN_INVALID)
+        if manifest.stage is Stage.G3_INPUT:
+            spec = manifest.session_spec
+            if spec is None or not spec.key_map.entries:
+                self._block_and_clear()
+                raise GateViolation(ErrorCode.INPUT_SESSION_INVALID)
         allowed = _STAGE_OPERATIONS[manifest.stage]
         specs = tuple(
             spec
@@ -272,6 +283,10 @@ class _CapabilityGate:
         if not result.succeeded:
             self._settle_machine_failure(reservation.phase)
             return
+        if result.session is not None:
+            if self._manifest is None or self._manifest.stage is not Stage.G3_INPUT:
+                self._violate(ErrorCode.INPUT_SESSION_INVALID)
+            self._session_result = result.session
         if reservation.phase is StagePhase.FORWARD:
             step = self._require_manifest().steps[reservation.step_index]
             self._forward_index += 1
@@ -331,6 +346,15 @@ class _CapabilityGate:
             and manual_confirmation
             and recovery_status in (RecoveryStatus.NOT_REQUIRED, RecoveryStatus.SUCCEEDED)
         )
+        if manifest.stage is Stage.G3_INPUT:
+            spec = manifest.session_spec
+            session = self._session_result
+            if (
+                spec is None
+                or session is None
+                or not session.meets_requirements(spec)
+            ):
+                can_advance = False
         next_state = _TRANSITIONS[manifest.stage][1] if can_advance else AdapterState.BLOCKED
         return _TransitionPreview(self._epoch, manifest.stage, next_state, recovery_status)
 
@@ -440,6 +464,7 @@ class _CapabilityGate:
         self._had_recovery = False
         self._recovery_machine_status = RecoveryStatus.NOT_REQUIRED
         self._committing = False
+        self._session_result = None
 
 
 class CommandPolicy:

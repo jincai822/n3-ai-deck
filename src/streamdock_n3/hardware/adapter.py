@@ -12,6 +12,7 @@ from streamdock_n3.hardware.contracts import (
     DeviceProfile,
     ErrorCode,
     HidInterface,
+    Operation,
     OperationResult,
     ResultStatus,
     Stage,
@@ -22,12 +23,19 @@ from streamdock_n3.hardware.evidence import (
     EvidenceRecord,
     EvidenceRecorder,
     EvidenceSink,
+    input_session_evidence,
     operation_evidence,
     permission_approval_evidence,
     profile_approval_evidence,
     stage_evidence,
 )
 from streamdock_n3.hardware.gate import GateViolation, _CapabilityGate
+from streamdock_n3.hardware.ipc import (
+    IpcSessionRequest,
+    IpcSessionResponse,
+    SessionRunner,
+    run_fake_helper,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +80,8 @@ class N3Adapter:
         "_evidence",
         "_external_evidence",
         "_approved_profile",
+        "_session_runner",
+        "_input_node",
         "_busy",
     )
 
@@ -81,6 +91,8 @@ class N3Adapter:
         current_commit: str,
         backend: Backend,
         external_evidence: EvidenceSink | None = None,
+        session_runner: SessionRunner | None = None,
+        input_node: str | None = None,
     ) -> None:
         if not isinstance(profile, DeviceProfile):
             raise TypeError("profile must be a DeviceProfile")
@@ -91,6 +103,8 @@ class N3Adapter:
         self._evidence = EvidenceRecorder()
         self._external_evidence = external_evidence
         self._approved_profile: ApprovedProfile | None = None
+        self._session_runner = session_runner
+        self._input_node = input_node
         self._busy = False
 
     @property
@@ -157,6 +171,30 @@ class N3Adapter:
                 record = profile_approval_evidence(self._profile, manifest, preview.epoch)
             elif manifest.stage is Stage.G2_PERMISSION:
                 record = permission_approval_evidence(self._profile, manifest, preview.epoch)
+            elif manifest.stage is Stage.G3_INPUT:
+                session = self._gate.session_result
+                if session is None:
+                    raise GateViolation(ErrorCode.INPUT_SESSION_INVALID)
+                spec = manifest.session_spec
+                if spec is None:
+                    raise GateViolation(ErrorCode.INPUT_SESSION_INVALID)
+                validated = preview.next_state is AdapterState.INPUT_VALIDATED
+                record = input_session_evidence(
+                    self._profile,
+                    manifest,
+                    session,
+                    ResultStatus.SUCCEEDED if validated else ResultStatus.REJECTED,
+                    ErrorCode.NONE if validated else ErrorCode.RESULT_MISSING,
+                    spec.duration_ms,
+                    preview.epoch,
+                    event_count=sum(
+                        count.press_count
+                        + count.release_count
+                        + count.left_count
+                        + count.right_count
+                        for count in session.counts
+                    ),
+                )
             else:
                 record = stage_evidence(
                     self._profile,
@@ -217,7 +255,14 @@ class N3Adapter:
         )
         manifest = self._gate.active_manifest
         try:
-            result = self._backend.execute(command, manifest)
+            if (
+                command.operation is Operation.OBSERVE_INPUTS
+                and manifest.session_spec is not None
+                and not recovery
+            ):
+                result = self._run_session(command, manifest, reservation.step_index)
+            else:
+                result = self._backend.execute(command, manifest)
         except Exception:
             result = OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
         if not isinstance(result, OperationResult):
@@ -262,6 +307,46 @@ class N3Adapter:
         else:
             self._evidence.commit(token)
         return result
+
+    def _run_session(
+        self,
+        command: AdapterCommand,
+        manifest: StageManifest,
+        step_index: int,
+    ) -> OperationResult:
+        node = self._input_node
+        spec = manifest.session_spec
+        if spec is None or node is None:
+            return OperationResult(
+                ResultStatus.REJECTED, ErrorCode.INPUT_SESSION_INVALID, 0
+            )
+        request = IpcSessionRequest(
+            profile=self._profile,
+            capability=self._gate.capability_snapshot,
+            manifest=manifest,
+            step_index=step_index,
+            command=command,
+            device_node=node,
+        )
+        if self._session_runner is not None:
+            handled: OperationResult | IpcSessionResponse = self._session_runner.run(
+                request, spec.duration_ms
+            )
+        else:
+            handled = run_fake_helper(request, spec.duration_ms)
+        if not isinstance(handled, IpcSessionResponse):
+            return OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE, 0)
+        response = handled
+        session = response.session
+        if session is None:
+            return response.result
+        return OperationResult(
+            status=response.result.status,
+            error_code=response.result.error_code,
+            duration_ms=response.result.duration_ms,
+            events=response.result.events,
+            session=session,
+        )
 
     def _enter(self) -> None:
         if self._busy:

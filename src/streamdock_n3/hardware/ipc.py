@@ -10,7 +10,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import NoReturn
+from typing import NoReturn, Protocol
 
 from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     MAX_DEADLINE_MS,
@@ -799,6 +799,13 @@ def _runner_failure(
     status: ResultStatus, error_code: ErrorCode, duration_ms: int = 0
 ) -> OperationResult:
     return OperationResult(status, error_code, duration_ms)
+
+
+class SessionRunner(Protocol):
+    """Run one read-only input session through the fixed helper boundary."""
+
+    def run(self, request: IpcSessionRequest, timeout_ms: int) -> IpcSessionResponse:
+        ...
 
 
 def run_fake_helper(

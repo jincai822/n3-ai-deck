@@ -19,6 +19,7 @@ from streamdock_n3.hardware.evidence import (
     EvidenceDisposition,
     EvidenceKind,
     EvidenceRecorder,
+    input_session_evidence,
     operation_evidence,
     permission_approval_evidence,
     profile_approval_evidence,
@@ -27,9 +28,11 @@ from streamdock_n3.hardware.evidence import (
 from tests.hardware_fixtures import (
     make_g1_manifest,
     make_g2_manifest,
+    make_g3_manifest,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
+    meeting_session_result,
 )
 
 
@@ -152,6 +155,11 @@ def test_json_remains_deterministic_closed_and_redacted() -> None:
         "recovery_status",
         "role_resolution_digest",
         "permission_plan_digest",
+        "session_latency_p95_ms",
+        "session_unknown_count",
+        "session_disconnected",
+        "session_counts_digest",
+        "session_mapping_digest",
     }
     assert parsed[0]["disposition"] == "committed"
     assert parsed[0]["epoch"] == 8
@@ -296,3 +304,57 @@ def test_approval_kinds_reject_each_others_digest_fields() -> None:
     permission = permission_approval_evidence(make_profile(), make_g2_manifest(), epoch=1)
     with pytest.raises(ValueError, match="only applies to profile approval"):
         replace(permission, role_resolution_digest="0" * 64)
+
+
+def test_input_session_evidence_is_redacted_and_deterministic() -> None:
+    manifest = make_g3_manifest()
+    result = meeting_session_result()
+    record = input_session_evidence(
+        make_profile(),
+        manifest,
+        result,
+        ResultStatus.SUCCEEDED,
+        ErrorCode.NONE,
+        60_000,
+        epoch=5,
+        event_count=80,
+    )
+
+    assert record.kind is EvidenceKind.INPUT_SESSION
+    assert record.session_latency_p95_ms == result.latency_p95_ms
+    assert record.session_unknown_count == 0
+    assert record.session_disconnected is False
+    assert len(record.session_counts_digest) == 64
+    assert len(record.session_mapping_digest) == 64
+    assert record.operation is None
+    assert record.payload_size == 0
+
+    rendered = json.dumps(record.to_dict(), sort_keys=True)
+    for forbidden in ("/dev/", "/home", "serial", "event12"):
+        assert forbidden not in rendered
+
+
+def test_input_session_evidence_rejects_invalid_payloads() -> None:
+    manifest = make_g3_manifest()
+    base = input_session_evidence(
+        make_profile(),
+        manifest,
+        meeting_session_result(),
+        ResultStatus.SUCCEEDED,
+        ErrorCode.NONE,
+        60_000,
+        epoch=1,
+    )
+
+    with pytest.raises(ValueError, match="cannot include operation outcome"):
+        replace(base, operation=Operation.OBSERVE_INPUTS)
+    with pytest.raises(ValueError, match="payload must be zero"):
+        replace(base, payload_size=1)
+    with pytest.raises(ValueError, match="latency p95"):
+        replace(base, session_latency_p95_ms=None)
+    with pytest.raises(ValueError, match="unknown count"):
+        replace(base, session_unknown_count=None)
+    with pytest.raises((TypeError, ValueError), match="disconnect flag"):
+        replace(base, session_disconnected=None)
+    with pytest.raises(ValueError, match="session_counts_digest"):
+        replace(base, session_counts_digest="short")
