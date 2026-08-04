@@ -45,14 +45,27 @@ def add_interface(
     return interface
 
 
+def add_input_association(
+    interface: Path,
+    name: str = "input5",
+    ev: str = "180000000000003f 0 0 0",
+    key: str = "1 0 0 0",
+) -> None:
+    capabilities = interface / "input" / name / "capabilities"
+    capabilities.mkdir(parents=True, exist_ok=True)
+    (capabilities / "ev").write_text(ev + "\n", encoding="ascii")
+    (capabilities / "key").write_text(key + "\n", encoding="ascii")
+
+
 def warning_codes(report: discovery.DiscoveryReport) -> list[str]:
     return [warning.code for warning in report.warnings]
 
 
-def test_target_with_two_hid_interfaces_is_ambiguous(tmp_path: Path) -> None:
+def test_target_with_two_hid_interfaces_resolves_roles(tmp_path: Path) -> None:
     add_usb_device(tmp_path, "1-2", "6602", "1000", "0300")
     add_interface(tmp_path, "1-2", "1.0", "00", "03", "00", "00")
-    add_interface(tmp_path, "1-2", "1.1", "01", "03", "01", "01")
+    input_interface = add_interface(tmp_path, "1-2", "1.1", "01", "03", "01", "01")
+    add_input_association(input_interface)
     add_interface(tmp_path, "1-2", "1.2", "02", "ff", "00", "00")
 
     report = discover_usb_devices(tmp_path)
@@ -66,14 +79,58 @@ def test_target_with_two_hid_interfaces_is_ambiguous(tmp_path: Path) -> None:
     assert observation.identity_status == "user_reported_candidate"
     assert observation.protocol_status == "unvalidated"
     assert observation.bcd_device == "0300"
-    assert observation.interface_selection == "ambiguous"
+    assert observation.interface_selection == "resolved"
     assert [item.number for item in observation.hid_interfaces] == ["00", "01"]
+    control, input_role = observation.hid_interfaces
+    assert control.role == "control"
+    assert control.role_basis == ("no_input_association", "vendor_hid")
+    assert control.input_associated is False
+    assert control.input_kind is None
+    assert input_role.role == "input"
+    assert input_role.role_basis == ("boot_keyboard", "input_subsystem")
+    assert input_role.input_associated is True
+    assert input_role.input_kind == "keyboard"
+    assert exit_code_for(report) == 0
+
+
+def test_two_keyboard_input_associations_are_ambiguous(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "1-3", "6602", "1000", "0300")
+    first = add_interface(tmp_path, "1-3", "1.0", "00", "03", "00", "00")
+    second = add_interface(tmp_path, "1-3", "1.1", "01", "03", "01", "01")
+    add_input_association(first)
+    add_input_association(second)
+
+    observation = discover_usb_devices(tmp_path).devices[0]
+
+    assert observation.interface_selection == "ambiguous"
+    assert [item.role for item in observation.hid_interfaces] == ["input", "input"]
+
+
+def test_boot_keyboard_resolves_without_readable_capabilities(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "1-4", "6602", "1000", "0300")
+    add_interface(tmp_path, "1-4", "1.0", "00", "03", "00", "00")
+    input_interface = add_interface(tmp_path, "1-4", "1.1", "01", "03", "01", "01")
+    (input_interface / "input" / "input5").mkdir(parents=True)
+
+    observation = discover_usb_devices(tmp_path).devices[0]
+
+    assert observation.interface_selection == "resolved"
+    assert observation.hid_interfaces[1].role == "input"
+
+
+def test_single_hid_interface_cannot_resolve_roles(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "2-2", "6602", "1000", "0300")
+    add_interface(tmp_path, "2-2", "1.0", "00", "03", "00", "00")
+
+    report = discover_usb_devices(tmp_path)
+
+    assert report.devices[0].interface_selection == "ambiguous"
     assert exit_code_for(report) == 0
 
 
 @pytest.mark.parametrize(
     ("with_hid", "selection", "expected_exit"),
-    ((True, "unique", 0), (False, "none", 3)),
+    ((True, "ambiguous", 0), (False, "none", 3)),
 )
 def test_target_interface_selection_and_exit_code(
     tmp_path: Path, with_hid: bool, selection: str, expected_exit: int
@@ -95,7 +152,7 @@ def test_any_usable_target_takes_exit_precedence(tmp_path: Path) -> None:
 
     report = discover_usb_devices(tmp_path)
 
-    assert [item.interface_selection for item in report.devices] == ["unique", "none"]
+    assert [item.interface_selection for item in report.devices] == ["ambiguous", "none"]
     assert exit_code_for(report) == 0
 
 
@@ -157,6 +214,10 @@ def test_raw_attributes_are_normalized(tmp_path: Path) -> None:
         "class": "03",
         "subclass": "0b",
         "protocol": "0c",
+        "input_associated": False,
+        "input_kind": None,
+        "role": "unknown",
+        "role_basis": ["hid_interface"],
     }
 
 
@@ -206,9 +267,18 @@ def test_report_schema_is_closed_and_report_values_are_immutable(tmp_path: Path)
                 "identity_status": "user_reported_candidate",
                 "protocol_status": "unvalidated",
                 "bcd_device": "0300",
-                "interface_selection": "unique",
+                "interface_selection": "ambiguous",
                 "hid_interfaces": [
-                    {"number": "00", "class": "03", "subclass": "00", "protocol": "00"}
+                    {
+                        "number": "00",
+                        "class": "03",
+                        "subclass": "00",
+                        "protocol": "00",
+                        "input_associated": False,
+                        "input_kind": None,
+                        "role": "control",
+                        "role_basis": ["no_input_association", "vendor_hid"],
+                    }
                 ],
             }
         ],
@@ -466,7 +536,7 @@ def test_trusted_mode_accepts_scoped_device_and_interface_links(
     report = discover_usb_devices(bus_root)
 
     assert len(report.devices) == 1
-    assert report.devices[0].interface_selection == "unique"
+    assert report.devices[0].interface_selection == "ambiguous"
     assert report.warnings == ()
 
 

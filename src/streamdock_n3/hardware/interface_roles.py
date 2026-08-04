@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 from streamdock_n3.hardware.contracts import (
     HidInterface,
@@ -12,6 +13,9 @@ from streamdock_n3.hardware.contracts import (
     RoleBasis,
     RoleResolutionStatus,
 )
+
+_BOOT_KEYBOARD: Final = (3, 1, 1)
+_VENDOR_HID: Final = (3, 0, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,10 +33,6 @@ class InterfaceRoleEvidence:
             raise ValueError("input_kind must be None, 'keyboard', or 'other'")
 
 
-_BOOT_KEYBOARD = (3, 1, 1)
-_VENDOR_HID = (3, 0, 0)
-
-
 def classify_interface_role(evidence: InterfaceRoleEvidence) -> HidInterfaceRole:
     """Classify one interface into INPUT, CONTROL, or UNKNOWN from passive evidence."""
     if not isinstance(evidence, InterfaceRoleEvidence):
@@ -42,14 +42,15 @@ def classify_interface_role(evidence: InterfaceRoleEvidence) -> HidInterfaceRole
         evidence.interface.subclass,
         evidence.interface.protocol,
     )
-    if descriptor == _BOOT_KEYBOARD:
-        return HidInterfaceRole(
-            evidence.interface, InterfaceRole.INPUT, (RoleBasis.BOOT_KEYBOARD,)
-        )
-    if evidence.input_associated and evidence.input_kind == "keyboard":
-        return HidInterfaceRole(
-            evidence.interface, InterfaceRole.INPUT, (RoleBasis.INPUT_SUBSYSTEM,)
-        )
+    if descriptor == _BOOT_KEYBOARD or (
+        evidence.input_associated and evidence.input_kind == "keyboard"
+    ):
+        basis: list[RoleBasis] = []
+        if descriptor == _BOOT_KEYBOARD:
+            basis.append(RoleBasis.BOOT_KEYBOARD)
+        if evidence.input_associated and evidence.input_kind == "keyboard":
+            basis.append(RoleBasis.INPUT_SUBSYSTEM)
+        return HidInterfaceRole(evidence.interface, InterfaceRole.INPUT, tuple(basis))
     if descriptor == _VENDOR_HID and not evidence.input_associated:
         return HidInterfaceRole(
             evidence.interface,

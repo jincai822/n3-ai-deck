@@ -16,6 +16,12 @@ from streamdock_n3.device_catalog import (
     find_known_usb_device,
     format_usb_id,
 )
+from streamdock_n3.hardware.contracts import HidInterface, RoleResolutionStatus
+from streamdock_n3.hardware.interface_roles import (
+    InterfaceRoleEvidence,
+    classify_interface_role,
+    resolve_roles,
+)
 
 DEFAULT_SYSFS_ROOT = Path("/sys/bus/usb/devices")
 SYS_DEVICES_ROOT = Path("/sys/devices")
@@ -28,8 +34,10 @@ ALLOWED_INTERFACE_ATTRIBUTES = frozenset(
         "bInterfaceProtocol",
     }
 )
+ALLOWED_INPUT_ATTRIBUTES = frozenset({"ev", "key"})
 
 _SAFE_SYSFS_NAME: Final = re.compile(r"[A-Za-z0-9._:-]+")
+_INPUT_ASSOCIATION_RE: Final = re.compile(r"input[0-9]+")
 _HEX_4: Final = re.compile(r"[0-9A-Fa-f]{1,4}")
 _HEX_2: Final = re.compile(r"[0-9A-Fa-f]{1,2}")
 
@@ -67,6 +75,10 @@ class HidInterfaceObservation:
     class_code: str
     subclass: str
     protocol: str
+    input_associated: bool
+    input_kind: str | None
+    role: str
+    role_basis: tuple[str, ...]
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +86,10 @@ class HidInterfaceObservation:
             "class": self.class_code,
             "subclass": self.subclass,
             "protocol": self.protocol,
+            "input_associated": self.input_associated,
+            "input_kind": self.input_kind,
+            "role": self.role,
+            "role_basis": list(self.role_basis),
         }
 
 
@@ -230,6 +246,108 @@ def _normalize_hex(value: str, pattern: re.Pattern[str], width: int) -> str | No
     return f"{int(text, 16):0{width}x}"
 
 
+def _read_input_attribute(
+    resolved_interface: Path,
+    association: str,
+    attribute: str,
+    warnings: list[DiscoveryWarning],
+) -> str | None:
+    """Read one allowlisted capability bitmap scoped to its resolved interface."""
+    if attribute not in ALLOWED_INPUT_ATTRIBUTES:
+        return None
+    logical = resolved_interface / "input" / association / "capabilities" / attribute
+    try:
+        if logical.is_symlink():
+            warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, association, attribute))
+            return None
+        resolved = logical.resolve(strict=True)
+        if not resolved.is_relative_to(resolved_interface):
+            warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, association, attribute))
+            return None
+        if not resolved.is_file():
+            warnings.append(_warning(WarningCode.UNREADABLE_ATTRIBUTE, association, attribute))
+            return None
+        return logical.read_text(encoding="ascii")
+    except (OSError, RuntimeError, UnicodeError):
+        warnings.append(_warning(WarningCode.UNREADABLE_ATTRIBUTE, association, attribute))
+        return None
+
+
+def _input_kind_from_bitmaps(ev: str | None, key: str | None) -> str | None:
+    """Summarize input capabilities as 'keyboard', 'other', or None."""
+    if ev is None:
+        return None
+    ev_tokens = ev.strip().split()
+    if not ev_tokens:
+        return None
+    try:
+        has_key_events = int(ev_tokens[0], 16) & (1 << 1)
+    except ValueError:
+        return None
+    if not has_key_events:
+        return "other"
+    key_tokens = (key or "").strip().split()
+    if not key_tokens:
+        return None
+    try:
+        has_key_codes = any(int(token, 16) for token in key_tokens)
+    except ValueError:
+        return None
+    return "keyboard" if has_key_codes else "other"
+
+
+def _scan_input_association(
+    resolved_interface: Path,
+    warnings: list[DiscoveryWarning],
+) -> tuple[bool, str | None]:
+    """Return (input_associated, input_kind) from passive sysfs input data."""
+    input_dir = resolved_interface / "input"
+    try:
+        if not input_dir.is_dir():
+            return False, None
+        associations = tuple(
+            sorted(
+                entry.name
+                for entry in input_dir.iterdir()
+                if _INPUT_ASSOCIATION_RE.fullmatch(entry.name)
+            )
+        )
+    except (OSError, RuntimeError):
+        return False, None
+    if not associations:
+        return False, None
+    ev = _read_input_attribute(resolved_interface, associations[0], "ev", warnings)
+    key = _read_input_attribute(resolved_interface, associations[0], "key", warnings)
+    return True, _input_kind_from_bitmaps(ev, key)
+
+
+def _interface_selection(
+    hid_interfaces: tuple[HidInterfaceObservation, ...],
+) -> str:
+    if not hid_interfaces:
+        return "none"
+    if len(hid_interfaces) < 2:
+        return "ambiguous"
+    resolution = resolve_roles(
+        tuple(
+            InterfaceRoleEvidence(
+                HidInterface(
+                    int(item.number, 16),
+                    int(item.class_code, 16),
+                    int(item.subclass, 16),
+                    int(item.protocol, 16),
+                ),
+                item.input_associated,
+                item.input_kind,
+            )
+            for item in hid_interfaces
+        )
+    )
+    if resolution.status is RoleResolutionStatus.RESOLVED:
+        return "resolved"
+    return "ambiguous"
+
+
 def _scan_hid_interfaces(
     device_entry: Path,
     resolved_device: Path,
@@ -304,12 +422,29 @@ def _scan_hid_interfaces(
         assert number is not None
         assert subclass is not None
         assert protocol is not None
+        input_associated, input_kind = _scan_input_association(resolved_interface, warnings)
+        role = classify_interface_role(
+            InterfaceRoleEvidence(
+                HidInterface(
+                    int(number, 16),
+                    int(class_code, 16),
+                    int(subclass, 16),
+                    int(protocol, 16),
+                ),
+                input_associated,
+                input_kind,
+            )
+        )
         observations.append(
             HidInterfaceObservation(
                 number=number,
                 class_code=class_code,
                 subclass=subclass,
                 protocol=protocol,
+                input_associated=input_associated,
+                input_kind=input_kind,
+                role=role.role.value,
+                role_basis=tuple(basis.value for basis in role.basis),
             )
         )
 
@@ -442,12 +577,7 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
             trusted_sysfs,
             warnings,
         )
-        if not hid_interfaces:
-            interface_selection = "none"
-        elif len(hid_interfaces) == 1:
-            interface_selection = "unique"
-        else:
-            interface_selection = "ambiguous"
+        interface_selection = _interface_selection(hid_interfaces)
         observations.append(
             UsbObservation(
                 sysfs_name=entry.name,
@@ -542,7 +672,8 @@ def render_human(report: DiscoveryReport) -> str:
                 lines.append(
                     "    "
                     f"{interface.number}: class {interface.class_code}, "
-                    f"subclass {interface.subclass}, protocol {interface.protocol}"
+                    f"subclass {interface.subclass}, protocol {interface.protocol}, "
+                    f"role {interface.role}"
                 )
         else:
             lines.append("  HID interfaces: none")

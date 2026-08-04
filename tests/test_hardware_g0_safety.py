@@ -50,7 +50,7 @@ REVIEWED_SOURCE_SHA256 = {
         "27d0f2614df65d531ae4034d8ca2cb9649fc6f8a8f669a8d6806a8d99772db82"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
-        "98ac546f4f377e9506f47ead989e670cbd7c94748b0d8da2853714b9bdbcd007"
+        "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
         "92e1f1332ede842cf72ceaeb65c05bcdf33454eba4661e93aa9bb59d4012f5e8"

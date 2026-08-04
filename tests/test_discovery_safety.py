@@ -62,9 +62,14 @@ def test_m1_production_sources_exclude_active_hardware_dependencies() -> None:
             assert forbidden not in source
 
 
-def test_discovery_imports_only_standard_library_and_device_catalog() -> None:
+def test_discovery_imports_only_standard_library_and_reviewed_contracts() -> None:
     source = Path("src/streamdock_n3/discovery.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
+    allowed_project = {
+        "streamdock_n3.device_catalog",
+        "streamdock_n3.hardware.contracts",
+        "streamdock_n3.hardware.interface_roles",
+    }
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -73,7 +78,7 @@ def test_discovery_imports_only_standard_library_and_device_catalog() -> None:
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module.startswith("streamdock_n3"):
-                assert module == "streamdock_n3.device_catalog"
+                assert module in allowed_project
             else:
                 assert module.split(".")[0] in sys.stdlib_module_names
 
@@ -98,7 +103,7 @@ def test_m1_sources_limit_all_file_io_call_sites() -> None:
                         if isinstance(cursor, (ast.FunctionDef, ast.AsyncFunctionDef)):
                             enclosing_function = cursor.name
                             break
-                    assert enclosing_function == "_read_attribute"
+                    assert enclosing_function in {"_read_attribute", "_read_input_attribute"}
                 assert node.func.attr not in {"read_bytes", "open", "write_text", "write_bytes"}
             elif isinstance(node.func, ast.Name):
                 assert node.func.id != "open"
@@ -189,7 +194,7 @@ def test_trusted_runtime_accepts_only_regular_leaf_files_scoped_to_each_entry(
 
     report = discover_usb_devices(bus_root)
 
-    assert report.devices[0].interface_selection == "unique"
+    assert report.devices[0].interface_selection == "ambiguous"
     assert accepted_paths
     assert {entry for _, entry in accepted_paths} == {resolved_device, resolved_interface}
 
