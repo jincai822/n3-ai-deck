@@ -9,6 +9,7 @@ from streamdock_n3.hardware.contracts import (
     HidInterface,
     InterfaceRoleResolution,
     Operation,
+    PermissionPlan,
     Stage,
     StageManifest,
 )
@@ -16,6 +17,7 @@ from streamdock_n3.hardware.interface_roles import (
     InterfaceRoleEvidence,
     resolve_roles,
 )
+from streamdock_n3.hardware.permissions import make_permission_plan
 
 TEST_COMMIT = "0123456789abcdef"
 TEST_INTERFACE = HidInterface(0, 3, 0, 0)
@@ -72,6 +74,18 @@ def make_incomplete_g1_manifest() -> StageManifest:
     return make_manifest(Stage.G1_PROFILE, role_resolution=None)
 
 
+def make_g2_plan(approval_reference: str = "test:g2") -> PermissionPlan:
+    return make_permission_plan(make_resolved_roles(), approval_reference)
+
+
+def make_g2_manifest() -> StageManifest:
+    return make_manifest(
+        Stage.G2_PERMISSION,
+        role_resolution=make_resolved_roles(),
+        permission_plan=make_g2_plan(),
+    )
+
+
 def command_spec(command: AdapterCommand) -> CommandSpec:
     return CommandSpec.from_command(command)
 
@@ -89,6 +103,7 @@ def make_manifest(
     stage: Stage,
     steps: tuple[CommandStep, ...] | None = None,
     role_resolution: InterfaceRoleResolution | None = None,
+    permission_plan: PermissionPlan | None = None,
 ) -> StageManifest:
     defaults = {
         Stage.G1_PROFILE: (command_step(AdapterCommand(Operation.APPROVE_PROFILE)),),
@@ -126,4 +141,5 @@ def make_manifest(
         recovery_plan=f"{stage.value}-recovery",
         approval_reference=f"test:{stage.value}",
         role_resolution=role_resolution,
+        permission_plan=permission_plan,
     )

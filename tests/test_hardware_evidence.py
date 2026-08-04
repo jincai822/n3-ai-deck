@@ -20,11 +20,13 @@ from streamdock_n3.hardware.evidence import (
     EvidenceKind,
     EvidenceRecorder,
     operation_evidence,
+    permission_approval_evidence,
     profile_approval_evidence,
     stage_evidence,
 )
 from tests.hardware_fixtures import (
     make_g1_manifest,
+    make_g2_manifest,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
@@ -149,6 +151,7 @@ def test_json_remains_deterministic_closed_and_redacted() -> None:
         "adapter_state",
         "recovery_status",
         "role_resolution_digest",
+        "permission_plan_digest",
     }
     assert parsed[0]["disposition"] == "committed"
     assert parsed[0]["epoch"] == 8
@@ -249,3 +252,47 @@ def test_stage_and_operation_records_reject_role_resolution_digest() -> None:
     )
     with pytest.raises(ValueError, match="only applies to profile approval"):
         replace(operation, role_resolution_digest="0" * 64)
+
+
+def test_permission_approval_evidence_is_redacted_and_deterministic() -> None:
+    manifest = make_g2_manifest()
+    record = permission_approval_evidence(make_profile(), manifest, epoch=2)
+
+    assert record.kind is EvidenceKind.PERMISSION_APPROVAL
+    assert record.adapter_state is AdapterState.PROFILE_APPROVED
+    assert record.recovery_status is RecoveryStatus.NOT_REQUIRED
+    assert record.approval_reference == manifest.approval_reference
+    assert manifest.permission_plan is not None
+    assert record.permission_plan_digest == manifest.permission_plan.digest()
+    assert record.operation is None
+    assert record.payload_size == 0
+
+    rendered = json.dumps(record.to_dict(), sort_keys=True)
+    for forbidden in ("/dev/", "/home", "/srv", "serial", "input12"):
+        assert forbidden not in rendered
+
+
+def test_permission_approval_rejects_payloads_and_missing_plan() -> None:
+    manifest = make_g2_manifest()
+    base = permission_approval_evidence(make_profile(), manifest, epoch=1)
+
+    with pytest.raises(ValueError, match="cannot include operation outcome"):
+        replace(base, operation=Operation.RECORD_PERMISSION)
+    with pytest.raises(ValueError, match="counters must be zero"):
+        replace(base, payload_size=1)
+    with pytest.raises(ValueError, match="permission plan digest"):
+        replace(base, permission_plan_digest="short")
+
+    incomplete = make_manifest(Stage.G2_PERMISSION)
+    with pytest.raises(ValueError, match="permission plan"):
+        permission_approval_evidence(make_profile(), incomplete, epoch=1)
+
+
+def test_approval_kinds_reject_each_others_digest_fields() -> None:
+    approval = profile_approval_evidence(make_profile(), make_g1_manifest(), epoch=1)
+    with pytest.raises(ValueError, match="only applies to permission approval"):
+        replace(approval, permission_plan_digest="0" * 64)
+
+    permission = permission_approval_evidence(make_profile(), make_g2_manifest(), epoch=1)
+    with pytest.raises(ValueError, match="only applies to profile approval"):
+        replace(permission, role_resolution_digest="0" * 64)

@@ -28,6 +28,8 @@ from tests.hardware_fixtures import (
     TEST_COMMIT,
     TEST_IMAGE,
     make_g1_manifest,
+    make_g2_manifest,
+    make_g2_plan,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
@@ -89,6 +91,8 @@ def recovery_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
 def hardware_manifest(stage: Stage) -> StageManifest:
     if stage is Stage.G1_PROFILE:
         return make_g1_manifest()
+    if stage is Stage.G2_PERMISSION:
+        return make_g2_manifest()
     return make_manifest(stage, role_resolution=make_resolved_roles())
 
 
@@ -551,3 +555,46 @@ def test_later_stage_with_drifted_roles_blocks_adapter() -> None:
 
     assert raised.value.code is ErrorCode.PROFILE_MISMATCH
     assert adapter.state is AdapterState.BLOCKED
+
+
+def test_g2_approval_records_permission_evidence_and_stays_approved() -> None:
+    adapter = adapter_advanced_to(Stage.G2_PERMISSION, FakeBackend())
+    adapter.begin_stage(make_g2_manifest())
+    assert adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+
+    approval = adapter.evidence_records[-1]
+    assert approval.kind is EvidenceKind.PERMISSION_APPROVAL
+    assert approval.disposition is EvidenceDisposition.COMMITTED
+    assert approval.permission_plan_digest == make_g2_plan().digest()
+    assert approval.approval_reference == "test:g2_permission"
+
+
+def test_g2_missing_plan_rejects_at_begin_stage() -> None:
+    adapter = adapter_advanced_to(Stage.G2_PERMISSION, FakeBackend())
+
+    with pytest.raises(GateViolation) as raised:
+        adapter.begin_stage(
+            make_manifest(Stage.G2_PERMISSION, role_resolution=make_resolved_roles())
+        )
+
+    assert raised.value.code is ErrorCode.PERMISSION_PLAN_INVALID
+    assert adapter.state is AdapterState.BLOCKED
+
+
+def test_g2_throwing_sink_blocks_permission_record() -> None:
+    sink = GateViolationSink(ErrorCode.NONE, fail_on_call=4)
+    adapter = N3Adapter(make_profile(), TEST_COMMIT, FakeBackend(), sink)
+    adapter.begin_stage(make_g1_manifest())
+    assert adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE)).succeeded
+    assert adapter.complete_stage(True) is AdapterState.PROFILE_APPROVED
+
+    adapter.begin_stage(make_g2_manifest())
+    assert adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION)).succeeded
+    with pytest.raises(GateViolation) as raised:
+        adapter.complete_stage(True)
+
+    assert raised.value.code is ErrorCode.EVIDENCE_FAILURE
+    assert adapter.state is AdapterState.BLOCKED
+    failed = adapter.evidence_records[-1]
+    assert failed.disposition is EvidenceDisposition.FAILED

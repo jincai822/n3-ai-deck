@@ -33,6 +33,7 @@ class EvidenceKind(StrEnum):
     OPERATION = "operation"
     STAGE = "stage"
     PROFILE_APPROVAL = "profile_approval"
+    PERMISSION_APPROVAL = "permission_approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,7 @@ class EvidenceRecord:
     adapter_state: AdapterState | None
     recovery_status: RecoveryStatus | None
     role_resolution_digest: str | None = None
+    permission_plan_digest: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -86,6 +88,8 @@ class EvidenceRecord:
         if self.kind is EvidenceKind.OPERATION:
             if self.role_resolution_digest is not None:
                 raise ValueError("role_resolution_digest only applies to profile approval")
+            if self.permission_plan_digest is not None:
+                raise ValueError("permission_plan_digest only applies to permission approval")
             if not isinstance(self.operation, Operation):
                 raise TypeError("operation evidence requires an Operation")
             if not isinstance(self.status, ResultStatus):
@@ -109,6 +113,8 @@ class EvidenceRecord:
                 raise TypeError("error_code must be an ErrorCode or None")
             if self.payload_size or self.duration_ms or self.event_count:
                 raise ValueError("profile approval evidence counters must be zero")
+            if self.permission_plan_digest is not None:
+                raise ValueError("permission_plan_digest only applies to permission approval")
             if (
                 not isinstance(self.role_resolution_digest, str)
                 or len(self.role_resolution_digest) != 64
@@ -118,9 +124,37 @@ class EvidenceRecord:
                 raise ValueError("profile approval evidence requires PROFILE_APPROVED state")
             if self.recovery_status is not RecoveryStatus.NOT_REQUIRED:
                 raise ValueError("profile approval evidence requires NOT_REQUIRED recovery")
+        elif self.kind is EvidenceKind.PERMISSION_APPROVAL:
+            if any(
+                value is not None
+                for value in (
+                    self.operation,
+                    self.brightness,
+                    self.key,
+                    self.status,
+                )
+            ):
+                raise ValueError("permission approval evidence cannot include operation outcome")
+            if self.error_code is not None and not isinstance(self.error_code, ErrorCode):
+                raise TypeError("error_code must be an ErrorCode or None")
+            if self.payload_size or self.duration_ms or self.event_count:
+                raise ValueError("permission approval evidence counters must be zero")
+            if self.role_resolution_digest is not None:
+                raise ValueError("role_resolution_digest only applies to profile approval")
+            if (
+                not isinstance(self.permission_plan_digest, str)
+                or len(self.permission_plan_digest) != 64
+            ):
+                raise ValueError("permission approval evidence requires a permission plan digest")
+            if self.adapter_state is not AdapterState.PROFILE_APPROVED:
+                raise ValueError("permission approval evidence requires PROFILE_APPROVED state")
+            if self.recovery_status is not RecoveryStatus.NOT_REQUIRED:
+                raise ValueError("permission approval evidence requires NOT_REQUIRED recovery")
         else:
             if self.role_resolution_digest is not None:
                 raise ValueError("role_resolution_digest only applies to profile approval")
+            if self.permission_plan_digest is not None:
+                raise ValueError("permission_plan_digest only applies to permission approval")
             if any(
                 value is not None
                 for value in (
@@ -166,6 +200,7 @@ class EvidenceRecord:
                 self.recovery_status.value if self.recovery_status is not None else None
             ),
             "role_resolution_digest": self.role_resolution_digest,
+            "permission_plan_digest": self.permission_plan_digest,
         }
 
 
@@ -332,4 +367,38 @@ def profile_approval_evidence(
         adapter_state=AdapterState.PROFILE_APPROVED,
         recovery_status=RecoveryStatus.NOT_REQUIRED,
         role_resolution_digest=resolution.digest(),
+    )
+
+
+def permission_approval_evidence(
+    profile: DeviceProfile,
+    manifest: StageManifest,
+    epoch: int,
+) -> EvidenceRecord:
+    plan = manifest.permission_plan
+    if plan is None:
+        raise ValueError("permission approval requires a permission plan")
+    return EvidenceRecord(
+        schema_version=SCHEMA_VERSION,
+        kind=EvidenceKind.PERMISSION_APPROVAL,
+        disposition=EvidenceDisposition.ATTEMPT,
+        epoch=epoch,
+        stage=manifest.stage,
+        commit=manifest.commit,
+        profile_digest=profile.digest(),
+        interface=manifest.interface,
+        operation=None,
+        brightness=None,
+        key=None,
+        payload_size=0,
+        status=None,
+        error_code=None,
+        duration_ms=0,
+        event_count=0,
+        expected_result=manifest.expected_result,
+        recovery_plan=manifest.recovery_plan,
+        approval_reference=manifest.approval_reference,
+        adapter_state=AdapterState.PROFILE_APPROVED,
+        recovery_status=RecoveryStatus.NOT_REQUIRED,
+        permission_plan_digest=plan.digest(),
     )

@@ -23,6 +23,7 @@ from streamdock_n3.hardware.evidence import (
     EvidenceRecorder,
     EvidenceSink,
     operation_evidence,
+    permission_approval_evidence,
     profile_approval_evidence,
     stage_evidence,
 )
@@ -154,6 +155,8 @@ class N3Adapter:
                 and preview.next_state is AdapterState.PROFILE_APPROVED
             ):
                 record = profile_approval_evidence(self._profile, manifest, preview.epoch)
+            elif manifest.stage is Stage.G2_PERMISSION:
+                record = permission_approval_evidence(self._profile, manifest, preview.epoch)
             else:
                 record = stage_evidence(
                     self._profile,

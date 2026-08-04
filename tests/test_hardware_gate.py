@@ -32,6 +32,8 @@ from tests.hardware_fixtures import (
     TEST_IMAGE,
     make_ambiguous_roles,
     make_g1_manifest,
+    make_g2_manifest,
+    make_g2_plan,
     make_incomplete_g1_manifest,
     make_manifest,
     make_profile,
@@ -83,6 +85,8 @@ def recovery_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
 def hardware_manifest(stage: Stage) -> StageManifest:
     if stage is Stage.G1_PROFILE:
         return make_g1_manifest()
+    if stage is Stage.G2_PERMISSION:
+        return make_g2_manifest()
     return make_manifest(stage, role_resolution=make_resolved_roles())
 
 
@@ -281,6 +285,47 @@ def test_later_stage_with_matching_roles_is_allowed() -> None:
 
     assert gate.session_snapshot is not None
     assert gate.session_snapshot.stage is Stage.G2_PERMISSION
+
+
+def test_g2_begin_rejects_missing_permission_plan() -> None:
+    gate = advance_through_g1()
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(
+            make_profile(),
+            make_manifest(Stage.G2_PERMISSION, role_resolution=make_resolved_roles()),
+            TEST_COMMIT,
+        )
+
+    assert raised.value.code is ErrorCode.PERMISSION_PLAN_INVALID
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_g2_begin_rejects_plan_missing_hidraw_coverage() -> None:
+    gate = advance_through_g1()
+    incomplete_plan = replace(
+        make_g2_plan(),
+        artifacts=(make_g2_plan().artifacts[0], make_g2_plan().artifacts[2]),
+    )
+    manifest = replace(
+        make_manifest(Stage.G2_PERMISSION, role_resolution=make_resolved_roles()),
+        permission_plan=incomplete_plan,
+    )
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), manifest, TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.PERMISSION_PLAN_INVALID
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_g2_with_approved_plan_records_and_stays_approved() -> None:
+    gate = advance_through_g1()
+    gate.begin(make_profile(), make_g2_manifest(), TEST_COMMIT)
+    reservation = gate.reserve_forward(AdapterCommand(Operation.RECORD_PERMISSION))
+    gate.settle(reservation, success())
+    preview = gate.preview_completion(True, None)
+    assert gate.commit(preview, lambda: None) is AdapterState.PROFILE_APPROVED
     gate = advance_to(Stage.G7_SIX_LCD)
     manifest = hardware_manifest(Stage.G7_SIX_LCD)
     gate.begin(make_profile(), manifest, TEST_COMMIT)

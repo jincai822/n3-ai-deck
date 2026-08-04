@@ -192,6 +192,13 @@ class _CapabilityGate:
         ):
             self._block_and_clear()
             raise GateViolation(ErrorCode.PROFILE_MISMATCH)
+        if manifest.stage is Stage.G2_PERMISSION:
+            plan = manifest.permission_plan
+            if plan is None or {
+                artifact.subsystem for artifact in plan.artifacts
+            } != {"input", "hidraw"}:
+                self._block_and_clear()
+                raise GateViolation(ErrorCode.PERMISSION_PLAN_INVALID)
         allowed = _STAGE_OPERATIONS[manifest.stage]
         specs = tuple(
             spec
