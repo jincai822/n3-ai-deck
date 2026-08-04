@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 G0_MODULES = (
     Path("src/streamdock_n3/hardware/__init__.py"),
     Path("src/streamdock_n3/hardware/contracts.py"),
+    Path("src/streamdock_n3/hardware/interface_roles.py"),
     Path("src/streamdock_n3/hardware/gate.py"),
     Path("src/streamdock_n3/hardware/backend.py"),
     Path("src/streamdock_n3/hardware/adapter.py"),
@@ -46,7 +47,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "e391d36f42540034d26898183b2909057779b03f39e85be2c1c9574b4585d610"
+        "27d0f2614df65d531ae4034d8ca2cb9649fc6f8a8f669a8d6806a8d99772db82"
+    ),
+    Path("src/streamdock_n3/hardware/interface_roles.py"): (
+        "98ac546f4f377e9506f47ead989e670cbd7c94748b0d8da2853714b9bdbcd007"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
         "d7a062c37e031c822ff9ecee32495ae888a0878b2b0f95e354b30ca7e7c7f6a5"
@@ -1226,7 +1230,7 @@ def test_g0_sources_contain_no_forbidden_hardware_or_system_strings() -> None:
     assert violations == []
 
 
-def test_source_tree_contains_exactly_the_eight_reviewed_g0_modules() -> None:
+def test_source_tree_contains_exactly_the_reviewed_g0_modules() -> None:
     assert _g0_module_set_violations(ROOT) == []
 
 
@@ -1307,6 +1311,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     adapter = modules["streamdock_n3.hardware.adapter"]
     ipc = modules["streamdock_n3.hardware.ipc"]
     evidence = modules["streamdock_n3.hardware.evidence"]
+    interface_roles = modules["streamdock_n3.hardware.interface_roles"]
 
     stage = contracts.Stage(contracts.Stage.G1_PROFILE.value)
     state = contracts.AdapterState(contracts.AdapterState.CANDIDATE.value)
@@ -1318,6 +1323,23 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     error_code = contracts.ErrorCode(contracts.ErrorCode.NONE.value)
     recovery_status = contracts.RecoveryStatus(contracts.RecoveryStatus.NOT_REQUIRED.value)
     interface = contracts.HidInterface(0, 3, 0, 0)
+    role_evidence = interface_roles.InterfaceRoleEvidence(interface, False, None)
+    interface_role = contracts.InterfaceRole(contracts.InterfaceRole.UNKNOWN.value)
+    role_basis = contracts.RoleBasis(contracts.RoleBasis.HID_INTERFACE.value)
+    resolution_status = contracts.RoleResolutionStatus(
+        contracts.RoleResolutionStatus.AMBIGUOUS.value
+    )
+    interface_role_binding = contracts.HidInterfaceRole(interface, interface_role, (role_basis,))
+    second_interface = contracts.HidInterface(1, 3, 0, 0)
+    second_role_binding = contracts.HidInterfaceRole(
+        second_interface, interface_role, (role_basis,)
+    )
+    role_resolution = contracts.InterfaceRoleResolution(
+        (interface_role_binding, second_role_binding),
+        resolution_status,
+        None,
+        None,
+    )
     profile = contracts.DeviceProfile(
         0x6602,
         0x1000,
@@ -1397,6 +1419,12 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             evidence_kind,
             evidence_record,
             recorder,
+            role_evidence,
+            interface_role,
+            role_basis,
+            resolution_status,
+            interface_role_binding,
+            role_resolution,
         )
     }
     declared = {
@@ -1978,6 +2006,7 @@ def test_complete_g0_source_closure_keeps_the_exact_brief_modules_and_dependenci
     assert (
         Path("src/streamdock_n3/hardware/__init__.py"),
         Path("src/streamdock_n3/hardware/contracts.py"),
+        Path("src/streamdock_n3/hardware/interface_roles.py"),
         Path("src/streamdock_n3/hardware/gate.py"),
         Path("src/streamdock_n3/hardware/backend.py"),
         Path("src/streamdock_n3/hardware/adapter.py"),
@@ -2041,7 +2070,7 @@ def test_dependency_static_gates_reject_import_time_unsafe_regressions(
     )
 
 
-def test_reviewed_snapshot_has_the_exact_unique_thirteen_path_closure() -> None:
+def test_reviewed_snapshot_has_the_exact_unique_fourteen_path_closure() -> None:
     expected_dependencies = (
         Path("src/streamdock_n3/__init__.py"),
         Path("src/streamdock_n3/device_catalog.py"),
@@ -2055,7 +2084,7 @@ def test_reviewed_snapshot_has_the_exact_unique_thirteen_path_closure() -> None:
     )
 
     assert expected == REVIEWED_SOURCE_PATHS
-    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 13
+    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 14
     assert set(REVIEWED_SOURCE_SHA256) == set(REVIEWED_SOURCE_PATHS)
 
 

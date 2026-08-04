@@ -103,6 +103,8 @@ class ErrorCode(StrEnum):
     RECOVERY_REQUIRED = "recovery_required"
     STALE_RESERVATION = "stale_reservation"
     EVIDENCE_FAILURE = "evidence_failure"
+    INTERFACE_AMBIGUITY = "interface_ambiguity"
+    PROFILE_EVIDENCE_INCOMPLETE = "profile_evidence_incomplete"
 
 
 class RecoveryStatus(StrEnum):
@@ -110,6 +112,25 @@ class RecoveryStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     UNKNOWN = "unknown"
+
+
+class InterfaceRole(StrEnum):
+    INPUT = "input"
+    CONTROL = "control"
+    UNKNOWN = "unknown"
+
+
+class RoleBasis(StrEnum):
+    BOOT_KEYBOARD = "boot_keyboard"
+    HID_INTERFACE = "hid_interface"
+    INPUT_SUBSYSTEM = "input_subsystem"
+    NO_INPUT_ASSOCIATION = "no_input_association"
+    VENDOR_HID = "vendor_hid"
+
+
+class RoleResolutionStatus(StrEnum):
+    RESOLVED = "resolved"
+    AMBIGUOUS = "ambiguous"
 
 
 def _canonical_digest(value: object) -> str:
@@ -220,6 +241,81 @@ class HidInterface:
             "subclass": f"{self.subclass:02x}",
             "protocol": f"{self.protocol:02x}",
         }
+
+
+@dataclass(frozen=True, slots=True)
+class HidInterfaceRole:
+    interface: HidInterface
+    role: InterfaceRole
+    basis: tuple[RoleBasis, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.interface, HidInterface):
+            raise TypeError("interface must be a HidInterface")
+        if not isinstance(self.role, InterfaceRole):
+            raise TypeError("role must be an InterfaceRole")
+        if not isinstance(self.basis, tuple) or not self.basis:
+            raise ValueError("basis must be a non-empty tuple")
+        if not all(isinstance(basis, RoleBasis) for basis in self.basis):
+            raise TypeError("basis must contain RoleBasis values")
+        if len(set(self.basis)) != len(self.basis):
+            raise ValueError("basis must not contain duplicates")
+        if tuple(sorted(self.basis)) != self.basis:
+            raise ValueError("basis must be sorted")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "interface": self.interface.to_dict(),
+            "role": self.role.value,
+            "basis": [basis.value for basis in self.basis],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InterfaceRoleResolution:
+    roles: tuple[HidInterfaceRole, ...]
+    status: RoleResolutionStatus
+    input_interface: HidInterface | None
+    control_interface: HidInterface | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.roles, tuple) or len(self.roles) < 2:
+            raise ValueError("roles must be a tuple of at least two HidInterfaceRole values")
+        if not all(isinstance(role, HidInterfaceRole) for role in self.roles):
+            raise TypeError("roles must contain HidInterfaceRole values")
+        numbers = [role.interface.number for role in self.roles]
+        if len(set(numbers)) != len(numbers):
+            raise ValueError("roles must have unique interface numbers")
+        if not isinstance(self.status, RoleResolutionStatus):
+            raise TypeError("status must be a RoleResolutionStatus")
+        input_roles = [role for role in self.roles if role.role is InterfaceRole.INPUT]
+        control_roles = [role for role in self.roles if role.role is InterfaceRole.CONTROL]
+        unknown_roles = [role for role in self.roles if role.role is InterfaceRole.UNKNOWN]
+        if self.status is RoleResolutionStatus.RESOLVED:
+            if len(input_roles) != 1 or len(control_roles) != 1 or unknown_roles:
+                raise ValueError("RESOLVED requires exactly one INPUT and one CONTROL role")
+            if self.input_interface != input_roles[0].interface:
+                raise ValueError("input_interface must match the INPUT role interface")
+            if self.control_interface != control_roles[0].interface:
+                raise ValueError("control_interface must match the CONTROL role interface")
+        else:
+            if self.input_interface is not None or self.control_interface is not None:
+                raise ValueError("AMBIGUOUS resolution must not bind interfaces")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status.value,
+            "input_interface": (
+                self.input_interface.to_dict() if self.input_interface is not None else None
+            ),
+            "control_interface": (
+                self.control_interface.to_dict() if self.control_interface is not None else None
+            ),
+            "roles": [role.to_dict() for role in self.roles],
+        }
+
+    def digest(self) -> str:
+        return _canonical_digest(self.to_dict())
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +434,7 @@ class StageManifest:
     recovery_plan: str
     approval_reference: str
     schema_version: int = SCHEMA_VERSION
+    role_resolution: InterfaceRoleResolution | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.stage, Stage):
@@ -357,6 +454,10 @@ class StageManifest:
         _validate_safe_token(self.recovery_plan, "recovery_plan")
         _validate_safe_token(self.approval_reference, "approval_reference")
         _validate_schema(self.schema_version)
+        if self.role_resolution is not None and not isinstance(
+            self.role_resolution, InterfaceRoleResolution
+        ):
+            raise TypeError("role_resolution must be an InterfaceRoleResolution or None")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -370,6 +471,9 @@ class StageManifest:
             "expected_result": self.expected_result,
             "recovery_plan": self.recovery_plan,
             "approval_reference": self.approval_reference,
+            "role_resolution": (
+                self.role_resolution.to_dict() if self.role_resolution is not None else None
+            ),
         }
 
     def digest(self) -> str:

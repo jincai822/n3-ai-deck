@@ -12,12 +12,17 @@ from streamdock_n3.hardware.contracts import (
     CommandStep,
     ErrorCode,
     HidInterface,
+    HidInterfaceRole,
     InputAction,
     InputKind,
+    InterfaceRole,
+    InterfaceRoleResolution,
     NormalizedInputEvent,
     Operation,
     OperationResult,
     ResultStatus,
+    RoleBasis,
+    RoleResolutionStatus,
     Stage,
     StagePhase,
     StageSessionSnapshot,
@@ -218,3 +223,117 @@ def test_operation_result_success_requires_none_error() -> None:
 def test_invalid_contract_values_fail_closed(factory: object) -> None:
     with pytest.raises((TypeError, ValueError)):
         factory()  # type: ignore[operator]
+
+
+def _resolved_roles() -> InterfaceRoleResolution:
+    return InterfaceRoleResolution(
+        (
+            HidInterfaceRole(
+                HidInterface(0, 3, 0, 0),
+                InterfaceRole.CONTROL,
+                (RoleBasis.NO_INPUT_ASSOCIATION, RoleBasis.VENDOR_HID),
+            ),
+            HidInterfaceRole(
+                HidInterface(1, 3, 1, 1),
+                InterfaceRole.INPUT,
+                (RoleBasis.BOOT_KEYBOARD,),
+            ),
+        ),
+        RoleResolutionStatus.RESOLVED,
+        HidInterface(1, 3, 1, 1),
+        HidInterface(0, 3, 0, 0),
+    )
+
+
+def test_role_resolution_is_frozen_canonical_and_digest_stable() -> None:
+    resolution = _resolved_roles()
+
+    assert len(resolution.digest()) == 64
+    assert resolution.digest() == _resolved_roles().digest()
+    with pytest.raises(FrozenInstanceError):
+        resolution.status = RoleResolutionStatus.AMBIGUOUS  # type: ignore[misc]
+
+
+def test_role_resolution_to_dict_is_redacted_and_stable() -> None:
+    resolution = _resolved_roles()
+
+    assert resolution.to_dict() == {
+        "status": "resolved",
+        "input_interface": {"number": "01", "class": "03", "subclass": "01", "protocol": "01"},
+        "control_interface": {"number": "00", "class": "03", "subclass": "00", "protocol": "00"},
+        "roles": [
+            {
+                "interface": {"number": "00", "class": "03", "subclass": "00", "protocol": "00"},
+                "role": "control",
+                "basis": ["no_input_association", "vendor_hid"],
+            },
+            {
+                "interface": {"number": "01", "class": "03", "subclass": "01", "protocol": "01"},
+                "role": "input",
+                "basis": ["boot_keyboard"],
+            },
+        ],
+    }
+
+
+def test_resolved_role_fields_must_match_roles() -> None:
+    with pytest.raises(ValueError):
+        InterfaceRoleResolution(
+            _resolved_roles().roles,
+            RoleResolutionStatus.RESOLVED,
+            HidInterface(0, 3, 0, 0),
+            HidInterface(1, 3, 1, 1),
+        )
+
+
+def test_ambiguous_resolution_requires_none_interfaces() -> None:
+    with pytest.raises(ValueError):
+        InterfaceRoleResolution(
+            _resolved_roles().roles,
+            RoleResolutionStatus.AMBIGUOUS,
+            HidInterface(1, 3, 1, 1),
+            None,
+        )
+
+
+def test_ambiguous_resolution_allows_unknown_roles() -> None:
+    roles = (
+        HidInterfaceRole(
+            HidInterface(0, 3, 0, 0),
+            InterfaceRole.CONTROL,
+            (RoleBasis.NO_INPUT_ASSOCIATION, RoleBasis.VENDOR_HID),
+        ),
+        HidInterfaceRole(
+            HidInterface(1, 3, 0, 0), InterfaceRole.UNKNOWN, (RoleBasis.HID_INTERFACE,)
+        ),
+    )
+    resolution = InterfaceRoleResolution(
+        roles, RoleResolutionStatus.AMBIGUOUS, None, None
+    )
+    assert resolution.status is RoleResolutionStatus.AMBIGUOUS
+
+
+def test_interface_role_basis_is_sorted_unique_and_non_empty() -> None:
+    with pytest.raises(ValueError):
+        HidInterfaceRole(HidInterface(0, 3, 0, 0), InterfaceRole.CONTROL, ())
+    with pytest.raises(ValueError):
+        HidInterfaceRole(
+            HidInterface(0, 3, 0, 0),
+            InterfaceRole.CONTROL,
+            (RoleBasis.VENDOR_HID, RoleBasis.VENDOR_HID),
+        )
+    with pytest.raises(ValueError):
+        HidInterfaceRole(
+            HidInterface(0, 3, 0, 0),
+            InterfaceRole.CONTROL,
+            (RoleBasis.VENDOR_HID, RoleBasis.NO_INPUT_ASSOCIATION),
+        )
+
+
+def test_manifest_accepts_role_resolution_field() -> None:
+    resolved = _resolved_roles()
+    manifest = replace(make_manifest(Stage.G1_PROFILE), role_resolution=resolved)
+
+    assert manifest.role_resolution is resolved
+    assert manifest.digest() != make_manifest(Stage.G1_PROFILE).digest()
+
