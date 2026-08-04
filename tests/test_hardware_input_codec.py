@@ -89,3 +89,11 @@ def test_normalize_event_produces_contract_validated_event() -> None:
     assert rotation == NormalizedInputEvent(
         InputKind.KNOB_ROTATE, 1, InputAction.RIGHT, 124
     )
+
+
+def test_parse_raw_event_accepts_negative_values_for_rotation() -> None:
+    payload = struct.pack("qqHHi", 0, 0, 3, 8, -1)
+
+    raw = parse_raw_event(payload, monotonic_ns=7)
+
+    assert raw.value == -1

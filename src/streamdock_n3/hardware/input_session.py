@@ -34,8 +34,8 @@ def parse_raw_event(payload: bytes, monotonic_ns: int) -> RawInputEvent:
     if not isinstance(payload, bytes) or len(payload) != _INPUT_EVENT_SIZE:
         raise ValueError("input event payload must be exactly 24 bytes")
     _seconds, _microseconds, event_type, code, value = _INPUT_EVENT_STRUCT.unpack(payload)
-    if event_type < 0 or code < 0 or value < 0:
-        raise ValueError("input event fields must be non-negative")
+    if event_type < 0 or code < 0:
+        raise ValueError("input event type and code must be non-negative")
     return RawInputEvent(event_type, code, value, monotonic_ns)
 
 

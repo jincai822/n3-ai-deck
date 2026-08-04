@@ -328,8 +328,14 @@ def run_session_flow(
     _advance_approvals(adapter, manifest)
     adapter.begin_stage(manifest)
     rendered = _render_result(adapter, node)
-    if rendered["session"] is not None and rendered["state"] not in (
-        "input_validated",
+    session = rendered["session"]
+    disconnected = (
+        isinstance(session, dict) and bool(session.get("disconnected", False))
+    )
+    if (
+        session is not None
+        and not disconnected
+        and rendered["state"] not in ("input_validated",)
     ):
         adapter.complete_stage(True)
         rendered["state"] = adapter.state.value
