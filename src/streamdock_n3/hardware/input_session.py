@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import select
+import statistics
 import struct
 import time
 from collections.abc import Iterator
@@ -12,6 +13,13 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from streamdock_n3.hardware.contracts import (
+    ControlCount,
+    ControlMapping,
+    ErrorCode,
+    InputAction,
+    InputKind,
+    InputSessionResult,
+    InputSessionSpec,
     KeyMap,
     NormalizedInputEvent,
     RawInputEvent,
@@ -58,6 +66,14 @@ class InputFileHandle:
 
     fileno: int
     opened_read_only: bool
+
+
+class InputSessionError(Exception):
+    """A stable fail-closed classification from a read-only input session."""
+
+    def __init__(self, code: ErrorCode) -> None:
+        self.code = code
+        super().__init__(code.value)
 
 
 class ReadOnlyInputBackend(Protocol):
@@ -116,3 +132,103 @@ class EvdevReadOnlyBackend:
         if isinstance(handle, InputFileHandle):
             with contextlib.suppress(OSError):
                 os.close(handle.fileno)
+
+
+_META_EVENT_TYPES = frozenset({0, 4})
+
+
+def run_input_session(
+    spec: InputSessionSpec,
+    node: str,
+    backend: ReadOnlyInputBackend,
+) -> InputSessionResult:
+    """Run one bounded read-only session and return its structured result."""
+    if not isinstance(spec, InputSessionSpec):
+        raise TypeError("spec must be an InputSessionSpec")
+    try:
+        handle = backend.open_read_only(node)
+    except PermissionError:
+        raise InputSessionError(ErrorCode.PERMISSION_DENIED) from None
+    except OSError:
+        raise InputSessionError(ErrorCode.BACKEND_FAILURE) from None
+    except (TypeError, ValueError):
+        raise InputSessionError(ErrorCode.INPUT_SESSION_INVALID) from None
+
+    started_ns = time.monotonic_ns()
+    deadline_ns = started_ns + spec.duration_ms * 1_000_000
+    counts: dict[tuple[int, InputKind], list[int]] = {}
+    mapping: dict[tuple[int, InputKind], ControlMapping] = {}
+    unknown_count = 0
+    latency_samples: list[int] = []
+    disconnected = False
+
+    try:
+        for raw in backend.read_events(handle, deadline_ns):
+            if not isinstance(raw, RawInputEvent):
+                raise InputSessionError(ErrorCode.INPUT_SESSION_INVALID)
+            if raw.type in _META_EVENT_TYPES:
+                continue
+            normalized = normalize_event(raw, spec.key_map)
+            if normalized is None:
+                unknown_count += 1
+                continue
+            key = (normalized.control_id, normalized.kind)
+            matched = spec.key_map.lookup(raw)
+            if matched is None:
+                raise InputSessionError(ErrorCode.INPUT_SESSION_INVALID)
+            entry, _action = matched
+            candidate = ControlMapping(
+                normalized.control_id,
+                normalized.kind,
+                entry.event_type,
+                entry.event_code,
+            )
+            mapping.setdefault(key, candidate)
+            counters = counts.setdefault(key, [0, 0, 0, 0])
+            if normalized.action is InputAction.PRESS:
+                counters[0] += 1
+            elif normalized.action is InputAction.RELEASE:
+                counters[1] += 1
+            elif normalized.action is InputAction.LEFT:
+                counters[2] += 1
+            else:
+                counters[3] += 1
+            latency_samples.append(max(0, time.monotonic_ns() - raw.monotonic_ns))
+    except InputSessionError:
+        raise
+    except OSError:
+        disconnected = True
+    except (TypeError, ValueError):
+        raise InputSessionError(ErrorCode.INPUT_SESSION_INVALID) from None
+    finally:
+        backend.close(handle)
+
+    latency_p95_ms = 0
+    if latency_samples:
+        latency_p95_ms = int(
+            statistics.quantiles(latency_samples, n=20)[18] / 1_000_000
+            if len(latency_samples) >= 20
+            else max(latency_samples) / 1_000_000
+        )
+    return InputSessionResult(
+        counts=tuple(
+            ControlCount(
+                control_id=control_id,
+                kind=kind,
+                press_count=counters[0],
+                release_count=counters[1],
+                left_count=counters[2],
+                right_count=counters[3],
+            )
+            for (control_id, kind), counters in sorted(
+                counts.items(), key=lambda item: (item[0][0], item[0][1].value)
+            )
+        ),
+        latency_p95_ms=latency_p95_ms,
+        unknown_count=unknown_count,
+        disconnected=disconnected,
+        mapping=tuple(
+            mapping[key]
+            for key in sorted(mapping, key=lambda item: (item[0], item[1].value))
+        ),
+    )

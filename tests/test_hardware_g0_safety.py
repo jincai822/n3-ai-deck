@@ -49,10 +49,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "d594fbfb5590c2525e29cb69ea4908862ce34f0ecc411c918fe739595abd8095"
+        "44ac848e972c525064456f613ba3a2ede40ee3ed4b6aebb921bd26c29251d701"
     ),
     Path("src/streamdock_n3/hardware/input_session.py"): (
-        "45ba94beb50c2e1fdbccf979f35f60ea8bd89a208caf946e5d80901047dc31f7"
+        "ef78b5eeadc18dcf0693089753f58326bf36bff6148fafa58af3cbb395f4188d"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
@@ -156,6 +156,7 @@ ALLOWED_STDLIB_IMPORTS = {
     "pathlib",
     "re",
     "select",
+    "statistics",
     "struct",
     "subprocess",
     "time",
@@ -486,14 +487,14 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
             # it operates only on an explicit root that can never be /etc or /usr.
             scoped_install = (
                 path == Path("src/streamdock_n3/hardware/permissions.py")
-                and _enclosing_class(tree, node) == "InstallTransaction"
+                and _enclosing_class(tree, call) == "InstallTransaction"
             )
             # input_session.py may call os.open only for the single O_RDONLY
             # device open inside EvdevReadOnlyBackend.open_read_only.
             scoped_read_open = (
                 path == Path("src/streamdock_n3/hardware/input_session.py")
                 and function.attr == "open"
-                and _enclosing_class(tree, node) == "EvdevReadOnlyBackend"
+                and _enclosing_class(tree, call) == "EvdevReadOnlyBackend"
             )
             if not scoped_install and not scoped_read_open:
                 violations.append(f"{path}:{call.lineno}: conservative file method {function.attr}")
@@ -505,9 +506,9 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 scoped_read_open = (
                     path == Path("src/streamdock_n3/hardware/input_session.py")
                     and file_functions == {"os.open"}
-                    and _enclosing_class(tree, node) == "EvdevReadOnlyBackend"
-                    and _enclosing_function(tree, node) is not None
-                    and _enclosing_function(tree, node).name == "open_read_only"  # type: ignore[union-attr]
+                    and _enclosing_class(tree, call) == "EvdevReadOnlyBackend"
+                    and _enclosing_function(tree, call) is not None
+                    and _enclosing_function(tree, call).name == "open_read_only"  # type: ignore[union-attr]
                 )
                 if not scoped_read_open:
                     violations.append(
@@ -1469,13 +1470,16 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     install_transaction = permissions.InstallTransaction(Path("/tmp/n3-ai-deck-inert"))
     input_handle = input_session.InputFileHandle(-1, opened_read_only=True)
     evdev_backend = input_session.EvdevReadOnlyBackend()
+    session_error = input_session.InputSessionError(
+        contracts.ErrorCode.INPUT_SESSION_INVALID
+    )
     key_map_entry = contracts.KeyMapEntry(1, 30, 1, input_kind, input_action)
     key_map = contracts.KeyMap((key_map_entry,))
     raw_event = contracts.RawInputEvent(1, 30, 1, 0)
     session_spec = contracts.InputSessionSpec(
         5_000, 10, 20, 250, 2_000, key_map
     )
-    control_count = contracts.ControlCount(1, 10, 10, 0, 0)
+    control_count = contracts.ControlCount(1, input_kind, 10, 10, 0, 0)
     control_mapping = contracts.ControlMapping(1, input_kind, 1, 30)
     session_result = contracts.InputSessionResult(
         (control_count,), 100, 0, False, (control_mapping,)
@@ -1597,6 +1601,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             install_transaction,
             input_handle,
             evdev_backend,
+            session_error,
             key_map_entry,
             key_map,
             raw_event,

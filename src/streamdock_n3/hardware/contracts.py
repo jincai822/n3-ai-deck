@@ -107,6 +107,7 @@ class ErrorCode(StrEnum):
     PROFILE_EVIDENCE_INCOMPLETE = "profile_evidence_incomplete"
     PERMISSION_PLAN_INVALID = "permission_plan_invalid"
     INPUT_SESSION_INVALID = "input_session_invalid"
+    PERMISSION_DENIED = "permission_denied"
 
 
 class RecoveryStatus(StrEnum):
@@ -762,6 +763,7 @@ class InputSessionSpec:
 @dataclass(frozen=True, slots=True)
 class ControlCount:
     control_id: int
+    kind: InputKind
     press_count: int
     release_count: int
     left_count: int
@@ -769,6 +771,8 @@ class ControlCount:
 
     def __post_init__(self) -> None:
         _validate_int(self.control_id, "control_id", 1, 9)
+        if not isinstance(self.kind, InputKind):
+            raise TypeError("kind must be an InputKind")
         for value, field in (
             (self.press_count, "press_count"),
             (self.release_count, "release_count"),
@@ -776,6 +780,11 @@ class ControlCount:
             (self.right_count, "right_count"),
         ):
             _validate_int(value, field, 0, 2**63 - 1)
+        if self.kind is InputKind.KNOB_ROTATE:
+            if self.press_count or self.release_count:
+                raise ValueError("rotation counts cannot carry press/release counts")
+        elif self.left_count or self.right_count:
+            raise ValueError("discrete counts cannot carry rotation counts")
 
 
 @dataclass(frozen=True, slots=True)
@@ -803,13 +812,13 @@ class InputSessionResult:
     mapping: tuple[ControlMapping, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.counts, tuple) or not self.counts:
-            raise ValueError("counts must be a non-empty tuple of ControlCount values")
+        if not isinstance(self.counts, tuple):
+            raise TypeError("counts must be a tuple of ControlCount values")
         if not all(isinstance(count, ControlCount) for count in self.counts):
             raise TypeError("counts must contain ControlCount values")
-        ids = [count.control_id for count in self.counts]
+        ids = [(count.control_id, count.kind) for count in self.counts]
         if len(set(ids)) != len(ids):
-            raise ValueError("counts must have unique control ids")
+            raise ValueError("counts must have unique control id/kind pairs")
         _validate_int(self.latency_p95_ms, "latency_p95_ms", 0, 2**63 - 1)
         _validate_int(self.unknown_count, "unknown_count", 0, 2**63 - 1)
         if not isinstance(self.disconnected, bool):
@@ -826,11 +835,11 @@ class InputSessionResult:
             return False
         if self.latency_p95_ms > spec.latency_p95_target_ms:
             return False
-        observed: dict[int, ControlCount] = {
-            count.control_id: count for count in self.counts
+        observed: dict[tuple[int, InputKind], ControlCount] = {
+            (count.control_id, count.kind): count for count in self.counts
         }
         for entry in spec.key_map.entries:
-            count = observed.get(entry.control_id)
+            count = observed.get((entry.control_id, entry.kind))
             if count is None:
                 return False
             if entry.kind is InputKind.KNOB_ROTATE:
@@ -852,6 +861,7 @@ class InputSessionResult:
             "counts": [
                 {
                     "control_id": count.control_id,
+                    "kind": count.kind.value,
                     "press_count": count.press_count,
                     "release_count": count.release_count,
                     "left_count": count.left_count,
