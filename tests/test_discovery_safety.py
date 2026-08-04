@@ -432,3 +432,34 @@ def test_reader_boundary_has_exact_signature() -> None:
         "warnings",
         "return",
     )
+
+
+def test_input_cli_never_writes_or_loads_sdk() -> None:
+    source = Path("src/streamdock_n3/input_cli.py").read_text(encoding="utf-8")
+
+    for forbidden in (
+        "write_text",
+        "write_bytes",
+        "os.open",
+        "subprocess",
+        "streamdock_n3._vendor",
+        "DeviceManager",
+        "import evdev",
+        "import pyudev",
+        "import gi",
+        "setfacl",
+        "udevadm",
+        "systemctl",
+        "sudo ",
+        "ioctl",
+    ):
+        assert forbidden not in source, f"input_cli.py contains forbidden text: {forbidden}"
+
+    assert "read_text" in source
+    assert "O_RDONLY" not in source
+
+
+def test_input_cli_console_script_targets_input_cli_main() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert project["scripts"]["n3-ai-deck-observe-inputs"] == "streamdock_n3.input_cli:main"
