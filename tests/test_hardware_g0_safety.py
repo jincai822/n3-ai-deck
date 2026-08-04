@@ -1262,6 +1262,47 @@ def test_g0_sources_contain_no_forbidden_hardware_or_system_strings() -> None:
     assert violations == []
 
 
+def test_permission_module_never_invokes_or_targets_system_state() -> None:
+    source = _source(Path("src/streamdock_n3/hardware/permissions.py"))
+
+    for forbidden in ("udevadm", "systemctl", "subprocess", "os.open"):
+        assert forbidden not in source, f"permissions.py contains forbidden text: {forbidden}"
+
+    for forbidden in ("/etc", "/usr"):
+        for occurrence in re.finditer(re.escape(forbidden), source):
+            line_start = source.rfind("\n", 0, occurrence.start()) + 1
+            line_end = source.index("\n", occurrence.start())
+            line = source[line_start:line_end]
+            assert line.strip().startswith("_FORBIDDEN_ROOTS"), (
+                f"permissions.py may name {forbidden} only in the forbidden-roots guard"
+            )
+
+    for occurrence in re.finditer(r"setfacl", source):
+        line = source[occurrence.start() : source.index("\n", occurrence.start())]
+        assert "{node}" in line and "{current_user}" in line, (
+            "setfacl must appear only as placeholder ACL template data"
+        )
+
+    tree = ast.parse(source, filename="permissions.py")
+    file_methods = {
+        "read_bytes",
+        "read_text",
+        "write_bytes",
+        "write_text",
+        "unlink",
+        "chmod",
+        "chown",
+    }
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr not in file_methods:
+            continue
+        assert _enclosing_class(tree, node) == "InstallTransaction", (
+            f"permissions.py file method {node.func.attr} must stay inside InstallTransaction"
+        )
+
+
 def test_source_tree_contains_exactly_the_reviewed_g0_modules() -> None:
     assert _g0_module_set_violations(ROOT) == []
 
