@@ -38,6 +38,7 @@ ALLOWED_INPUT_ATTRIBUTES = frozenset({"ev", "key"})
 
 _SAFE_SYSFS_NAME: Final = re.compile(r"[A-Za-z0-9._:-]+")
 _INPUT_ASSOCIATION_RE: Final = re.compile(r"input[0-9]+")
+_HID_DEVICE_RE: Final = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\.[0-9a-fA-F]+")
 _HEX_4: Final = re.compile(r"[0-9A-Fa-f]{1,4}")
 _HEX_2: Final = re.compile(r"[0-9A-Fa-f]{1,2}")
 
@@ -248,6 +249,7 @@ def _normalize_hex(value: str, pattern: re.Pattern[str], width: int) -> str | No
 
 def _read_input_attribute(
     resolved_interface: Path,
+    input_dir: Path,
     association: str,
     attribute: str,
     warnings: list[DiscoveryWarning],
@@ -255,7 +257,7 @@ def _read_input_attribute(
     """Read one allowlisted capability bitmap scoped to its resolved interface."""
     if attribute not in ALLOWED_INPUT_ATTRIBUTES:
         return None
-    logical = resolved_interface / "input" / association / "capabilities" / attribute
+    logical = input_dir / association / "capabilities" / attribute
     try:
         if logical.is_symlink():
             warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, association, attribute))
@@ -296,30 +298,52 @@ def _input_kind_from_bitmaps(ev: str | None, key: str | None) -> str | None:
     return "keyboard" if has_key_codes else "other"
 
 
+def _association_input_dirs(
+    resolved_interface: Path,
+) -> tuple[Path, ...]:
+    """Collect input-association parent dirs, direct and nested under HID devices."""
+    input_dirs: list[Path] = []
+    direct = resolved_interface / "input"
+    if direct.is_dir():
+        input_dirs.append(direct)
+    try:
+        for entry in resolved_interface.iterdir():
+            if _HID_DEVICE_RE.fullmatch(entry.name) is None:
+                continue
+            nested = entry / "input"
+            if nested.is_dir():
+                input_dirs.append(nested)
+    except (OSError, RuntimeError):
+        pass
+    return tuple(input_dirs)
+
+
 def _scan_input_association(
     resolved_interface: Path,
     warnings: list[DiscoveryWarning],
 ) -> tuple[bool, str | None]:
     """Return (input_associated, input_kind) from passive sysfs input data."""
-    input_dir = resolved_interface / "input"
-    try:
-        if not input_dir.is_dir():
-            return False, None
-        associations = tuple(
-            sorted(
+    associations: list[tuple[Path, str]] = []
+    for input_dir in _association_input_dirs(resolved_interface):
+        try:
+            names = sorted(
                 entry.name
                 for entry in input_dir.iterdir()
                 if _INPUT_ASSOCIATION_RE.fullmatch(entry.name)
             )
-        )
-    except (OSError, RuntimeError):
-        return False, None
+        except (OSError, RuntimeError):
+            continue
+        associations.extend((input_dir, name) for name in names)
     if not associations:
         return False, None
     kinds: list[str | None] = []
-    for association in associations:
-        ev = _read_input_attribute(resolved_interface, association, "ev", warnings)
-        key = _read_input_attribute(resolved_interface, association, "key", warnings)
+    for input_dir, association in associations:
+        ev = _read_input_attribute(
+            resolved_interface, input_dir, association, "ev", warnings
+        )
+        key = _read_input_attribute(
+            resolved_interface, input_dir, association, "key", warnings
+        )
         kinds.append(_input_kind_from_bitmaps(ev, key))
     if any(kind == "keyboard" for kind in kinds):
         return True, "keyboard"

@@ -50,8 +50,10 @@ def add_input_association(
     name: str = "input5",
     ev: str = "180000000000003f 0 0 0",
     key: str = "1 0 0 0",
+    nested_hid_dir: str | None = None,
 ) -> None:
-    capabilities = interface / "input" / name / "capabilities"
+    parent = interface / (nested_hid_dir or "")
+    capabilities = parent / "input" / name / "capabilities"
     capabilities.mkdir(parents=True, exist_ok=True)
     (capabilities / "ev").write_text(ev + "\n", encoding="ascii")
     (capabilities / "key").write_text(key + "\n", encoding="ascii")
@@ -130,6 +132,32 @@ def test_multiple_input_associations_any_keyboard_wins(tmp_path: Path) -> None:
     assert observation.hid_interfaces[1].input_associated is True
     assert observation.hid_interfaces[1].input_kind == "keyboard"
     assert observation.interface_selection == "resolved"
+
+
+def test_nested_hid_device_input_association_is_detected(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "1-6", "6602", "1000", "0300")
+    add_interface(tmp_path, "1-6", "1.0", "00", "03", "00", "00")
+    input_interface = add_interface(tmp_path, "1-6", "1.1", "01", "03", "01", "01")
+    add_input_association(input_interface, nested_hid_dir="0003:6602:1000.0010")
+
+    observation = discover_usb_devices(tmp_path).devices[0]
+    interface = observation.hid_interfaces[1]
+
+    assert interface.input_associated is True
+    assert interface.input_kind == "keyboard"
+    assert interface.role == "input"
+    assert interface.role_basis == ("boot_keyboard", "input_subsystem")
+
+
+def test_non_hid_device_subdirectory_is_not_scanned_for_inputs(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "1-7", "6602", "1000", "0300")
+    control = add_interface(tmp_path, "1-7", "1.0", "00", "03", "00", "00")
+    add_input_association(control, nested_hid_dir="hidraw")
+    add_interface(tmp_path, "1-7", "1.1", "01", "03", "01", "01")
+
+    observation = discover_usb_devices(tmp_path).devices[0]
+
+    assert observation.hid_interfaces[0].input_associated is False
 
 
 def test_single_hid_interface_cannot_resolve_roles(tmp_path: Path) -> None:
