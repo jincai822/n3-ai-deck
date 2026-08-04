@@ -25,10 +25,16 @@ from streamdock_n3.hardware.contracts import (
     CapabilitySnapshot,
     CommandSpec,
     CommandStep,
+    ControlCount,
+    ControlMapping,
     DeviceProfile,
     ErrorCode,
     InputAction,
     InputKind,
+    InputSessionResult,
+    InputSessionSpec,
+    KeyMap,
+    KeyMapEntry,
     NormalizedInputEvent,
     Operation,
     OperationResult,
@@ -41,10 +47,16 @@ from streamdock_n3.hardware.ipc import (
     MAX_REQUEST_BYTES,
     MAX_RESPONSE_BYTES,
     IpcRequest,
+    IpcSessionRequest,
+    IpcSessionResponse,
     decode_request,
     decode_response,
+    decode_session_request,
+    decode_session_response,
     encode_request,
     encode_response,
+    encode_session_request,
+    encode_session_response,
     run_fake_helper,
 )
 from tests.hardware_fixtures import (
@@ -53,6 +65,7 @@ from tests.hardware_fixtures import (
     TEST_INTERFACE,
     make_manifest,
     make_profile,
+    make_resolved_roles,
 )
 
 
@@ -152,7 +165,7 @@ def payload_limit_request() -> IpcRequest:
                 image_sha256=sha256(f"filler-{index}".encode()).hexdigest(),
             )
         )
-        for index in range(606)
+        for index in range(605)
     )
     manifest = StageManifest(
         Stage.G6_ONE_LCD,
@@ -162,7 +175,7 @@ def payload_limit_request() -> IpcRequest:
         tuple(steps),
         600_000,
         "x" * 128,
-        "x" * 23,
+        "x" * 123,
         "x",
     )
     request = IpcRequest(
@@ -291,6 +304,9 @@ def test_request_uses_closed_canonical_schema() -> None:
         "expected_result",
         "recovery_plan",
         "approval_reference",
+        "role_resolution",
+        "permission_plan",
+        "session_spec",
     }
     assert set(wire["manifest"]["interface"]) == {
         "number",
@@ -972,3 +988,127 @@ def test_fake_helper_rejects_invalid_timeout_before_spawn(
         run_fake_helper(valid_request(), timeout_ms=timeout_ms)  # type: ignore[arg-type]
 
     assert called is False
+
+
+def valid_session_request() -> IpcSessionRequest:
+    return IpcSessionRequest(
+        profile=make_profile(),
+        capability=CapabilitySnapshot(
+            AdapterState.PROFILE_APPROVED,
+            make_profile().digest(),
+            make_profile().bcd_device,
+            TEST_INTERFACE,
+            4,
+            Stage.G3_INPUT,
+            StagePhase.FORWARD,
+        ),
+        manifest=make_manifest(
+            Stage.G3_INPUT,
+            role_resolution=make_resolved_roles(),
+            session_spec=InputSessionSpec(
+                duration_ms=600_000,
+                expected_press_count=10,
+                expected_rotation_count=20,
+                latency_p95_target_ms=250,
+                disconnect_grace_ms=2_000,
+                key_map=KeyMap(
+                    (
+                        KeyMapEntry(1, 30, 1, InputKind.BUTTON, InputAction.PRESS),
+                        KeyMapEntry(3, 8, 1, InputKind.KNOB_ROTATE, InputAction.LEFT),
+                    )
+                ),
+            ),
+        ),
+        step_index=0,
+        command=AdapterCommand(Operation.OBSERVE_INPUTS),
+        device_node="/dev/input/event12",
+    )
+
+
+def test_session_request_round_trips_with_closed_schema() -> None:
+    encoded = encode_session_request(valid_session_request())
+    wire = json.loads(encoded)
+
+    assert set(wire) == {
+        "schema_version",
+        "profile",
+        "capability",
+        "manifest",
+        "step_index",
+        "command",
+        "device_node",
+    }
+    assert wire["device_node"] == "/dev/input/event12"
+    assert "serial" not in encoded
+    assert decode_session_request(encoded) == valid_session_request()
+
+
+def test_session_request_rejects_arbitrary_device_nodes() -> None:
+    for node in ("/dev/hidraw0", "/tmp/event12", "event12", "/dev/input/eventx"):
+        with pytest.raises(ValueError):
+            replace(valid_session_request(), device_node=node)
+
+
+def test_session_response_round_trips_redacted_summary() -> None:
+    session = InputSessionResult(
+        counts=(ControlCount(1, InputKind.BUTTON, 10, 10, 0, 0),),
+        latency_p95_ms=120,
+        unknown_count=3,
+        disconnected=False,
+        mapping=(ControlMapping(1, InputKind.BUTTON, 1, 30),),
+    )
+    result = OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 60_000)
+    response = IpcSessionResponse(result, session)
+
+    encoded = encode_session_response(response)
+    wire = json.loads(encoded)
+    assert set(wire) == {
+        "schema_version",
+        "status",
+        "error_code",
+        "duration_ms",
+        "events",
+        "session",
+    }
+    assert decode_session_response(encoded) == response
+    assert "/dev/" not in encoded
+
+
+def test_session_response_accepts_null_session() -> None:
+    result = OperationResult(ResultStatus.REJECTED, ErrorCode.PERMISSION_DENIED, 0)
+    response = IpcSessionResponse(result, None)
+
+    assert decode_session_response(encode_session_response(response)) == response
+
+
+def test_helper_dispatches_session_requests_with_fixed_argv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(argv)
+        session = InputSessionResult(
+            counts=(ControlCount(1, InputKind.BUTTON, 1, 1, 0, 0),),
+            latency_p95_ms=10,
+            unknown_count=0,
+            disconnected=False,
+            mapping=(ControlMapping(1, InputKind.BUTTON, 1, 30),),
+        )
+        result = OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, 5)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            encode_session_response(IpcSessionResponse(result, session)) + "\n",
+            "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    handled = run_fake_helper(valid_session_request(), 100)
+
+    assert isinstance(handled, IpcSessionResponse)
+    assert handled.result.succeeded is True
+    assert handled.session is not None
+    assert handled.session.counts[0].press_count == 1
+    assert calls == [[sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"]]

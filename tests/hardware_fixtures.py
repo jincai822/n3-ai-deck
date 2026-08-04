@@ -7,6 +7,7 @@ from streamdock_n3.hardware.contracts import (
     CommandStep,
     DeviceProfile,
     HidInterface,
+    InputSessionSpec,
     InterfaceRoleResolution,
     Operation,
     PermissionPlan,
@@ -104,6 +105,7 @@ def make_manifest(
     steps: tuple[CommandStep, ...] | None = None,
     role_resolution: InterfaceRoleResolution | None = None,
     permission_plan: PermissionPlan | None = None,
+    session_spec: InputSessionSpec | None = None,
 ) -> StageManifest:
     defaults = {
         Stage.G1_PROFILE: (command_step(AdapterCommand(Operation.APPROVE_PROFILE)),),
@@ -142,4 +144,5 @@ def make_manifest(
         approval_reference=f"test:{stage.value}",
         role_resolution=role_resolution,
         permission_plan=permission_plan,
+        session_spec=session_spec,
     )

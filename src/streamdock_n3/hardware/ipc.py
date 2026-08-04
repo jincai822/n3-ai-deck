@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -20,17 +21,31 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     CapabilitySnapshot,
     CommandSpec,
     CommandStep,
+    ControlCount,
+    ControlMapping,
     DeviceProfile,
     ErrorCode,
     HidInterface,
+    HidInterfaceRole,
     IdentityStatus,
     InputAction,
     InputKind,
+    InputSessionResult,
+    InputSessionSpec,
+    InterfaceRole,
+    InterfaceRoleResolution,
+    KeyMap,
+    KeyMapEntry,
     NormalizedInputEvent,
     Operation,
     OperationResult,
+    PermissionArtifact,
+    PermissionKind,
+    PermissionPlan,
     ProtocolStatus,
     ResultStatus,
+    RoleBasis,
+    RoleResolutionStatus,
     Stage,
     StageManifest,
     StagePhase,
@@ -74,6 +89,9 @@ _MANIFEST_KEYS = frozenset(
         "expected_result",
         "recovery_plan",
         "approval_reference",
+        "role_resolution",
+        "permission_plan",
+        "session_spec",
     }
 )
 _SPEC_KEYS = frozenset({"operation", "brightness", "key", "image_sha256"})
@@ -81,6 +99,55 @@ _STEP_KEYS = frozenset({"forward", "recovery"})
 _COMMAND_KEYS = frozenset({"operation", "brightness", "key", "image_base64"})
 _RESPONSE_KEYS = frozenset({"schema_version", "status", "error_code", "duration_ms", "events"})
 _EVENT_KEYS = frozenset({"kind", "control_id", "action", "monotonic_ns"})
+_ROLE_KEYS = frozenset({"interface", "role", "basis"})
+_ROLE_RESOLUTION_KEYS = frozenset(
+    {"status", "input_interface", "control_interface", "roles"}
+)
+_PERMISSION_ARTIFACT_KEYS = frozenset({"kind", "subsystem", "role", "rendered"})
+_PERMISSION_PLAN_KEYS = frozenset({"approval_reference", "artifacts"})
+_KEY_MAP_ENTRY_KEYS = frozenset(
+    {"event_type", "event_code", "control_id", "kind", "press_action"}
+)
+_KEY_MAP_KEYS = frozenset({"entries"})
+_SESSION_SPEC_KEYS = frozenset(
+    {
+        "duration_ms",
+        "expected_press_count",
+        "expected_rotation_count",
+        "latency_p95_target_ms",
+        "disconnect_grace_ms",
+        "key_map",
+    }
+)
+_SESSION_REQUEST_KEYS = frozenset(
+    {
+        "schema_version",
+        "profile",
+        "capability",
+        "manifest",
+        "step_index",
+        "command",
+        "device_node",
+    }
+)
+_COUNT_KEYS = frozenset(
+    {"control_id", "kind", "press_count", "release_count", "left_count", "right_count"}
+)
+_MAPPING_KEYS = frozenset({"control_id", "kind", "event_type", "event_code"})
+_SESSION_RESULT_KEYS = frozenset(
+    {"counts", "latency_p95_ms", "unknown_count", "disconnected", "mapping"}
+)
+_SESSION_RESPONSE_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "error_code",
+        "duration_ms",
+        "events",
+        "session",
+    }
+)
+_DEVICE_NODE_RE = re.compile(r"/dev/input/event[0-9]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +176,51 @@ class IpcRequest:
             or self.schema_version != SCHEMA_VERSION
         ):
             raise ValueError("invalid schema version")
+
+
+@dataclass(frozen=True, slots=True)
+class IpcSessionRequest:
+    profile: DeviceProfile
+    capability: CapabilitySnapshot
+    manifest: StageManifest
+    step_index: int
+    command: AdapterCommand
+    device_node: str
+    schema_version: int = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.profile, DeviceProfile):
+            raise TypeError("profile must be a DeviceProfile")
+        if not isinstance(self.capability, CapabilitySnapshot):
+            raise TypeError("capability must be a CapabilitySnapshot")
+        if not isinstance(self.manifest, StageManifest):
+            raise TypeError("manifest must be a StageManifest")
+        if isinstance(self.step_index, bool) or not isinstance(self.step_index, int):
+            raise TypeError("step_index must be an integer")
+        if not isinstance(self.command, AdapterCommand):
+            raise TypeError("command must be an AdapterCommand")
+        if not isinstance(self.device_node, str) or _DEVICE_NODE_RE.fullmatch(
+            self.device_node
+        ) is None:
+            raise ValueError("device_node must be a plain input event node path")
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, int)
+            or self.schema_version != SCHEMA_VERSION
+        ):
+            raise ValueError("invalid schema version")
+
+
+@dataclass(frozen=True, slots=True)
+class IpcSessionResponse:
+    result: OperationResult
+    session: InputSessionResult | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.result, OperationResult):
+            raise TypeError("result must be an OperationResult")
+        if self.session is not None and not isinstance(self.session, InputSessionResult):
+            raise TypeError("session must be an InputSessionResult or None")
 
 
 def _invalid_request() -> NoReturn:
@@ -171,11 +283,157 @@ def _interface_to_wire(interface: HidInterface) -> dict[str, str]:
 def _parse_interface(value: object) -> HidInterface:
     wire = _require_exact_keys(value, _INTERFACE_KEYS)
     return HidInterface(
-        number=_parse_hex(wire["number"], 2),
-        interface_class=_parse_hex(wire["class"], 2),
-        subclass=_parse_hex(wire["subclass"], 2),
-        protocol=_parse_hex(wire["protocol"], 2),
+        number=int(_require_str(wire["number"]), 16),
+        interface_class=int(_require_str(wire["class"]), 16),
+        subclass=int(_require_str(wire["subclass"]), 16),
+        protocol=int(_require_str(wire["protocol"]), 16),
     )
+
+
+def _role_resolution_to_wire(resolution: InterfaceRoleResolution) -> dict[str, object]:
+    return resolution.to_dict()
+
+
+def _parse_role_resolution(value: object) -> InterfaceRoleResolution:
+    wire = _require_exact_keys(value, _ROLE_RESOLUTION_KEYS)
+    roles_value = wire["roles"]
+    if not isinstance(roles_value, list):
+        raise ValueError
+    roles = tuple(_parse_role(role) for role in roles_value)
+    input_interface = wire["input_interface"]
+    control_interface = wire["control_interface"]
+    return InterfaceRoleResolution(
+        roles=roles,
+        status=RoleResolutionStatus(_require_str(wire["status"])),
+        input_interface=(
+            _parse_interface(input_interface) if input_interface is not None else None
+        ),
+        control_interface=(
+            _parse_interface(control_interface) if control_interface is not None else None
+        ),
+    )
+
+
+def _parse_role(value: object) -> HidInterfaceRole:
+    wire = _require_exact_keys(value, _ROLE_KEYS)
+    basis_value = wire["basis"]
+    if not isinstance(basis_value, list):
+        raise ValueError
+    return HidInterfaceRole(
+        interface=_parse_interface(wire["interface"]),
+        role=InterfaceRole(_require_str(wire["role"])),
+        basis=tuple(RoleBasis(_require_str(item)) for item in basis_value),
+    )
+
+
+def _permission_plan_to_wire(plan: PermissionPlan) -> dict[str, object]:
+    return plan.to_dict()
+
+
+def _parse_permission_plan(value: object) -> PermissionPlan:
+    wire = _require_exact_keys(value, _PERMISSION_PLAN_KEYS)
+    artifacts_value = wire["artifacts"]
+    if not isinstance(artifacts_value, list):
+        raise ValueError
+    artifacts = tuple(_parse_permission_artifact(item) for item in artifacts_value)
+    return PermissionPlan(
+        artifacts=artifacts,
+        approval_reference=_require_str(wire["approval_reference"]),
+    )
+
+
+def _parse_permission_artifact(value: object) -> PermissionArtifact:
+    wire = _require_exact_keys(value, _PERMISSION_ARTIFACT_KEYS)
+    return PermissionArtifact(
+        kind=PermissionKind(_require_str(wire["kind"])),
+        subsystem=_require_str(wire["subsystem"]),
+        role=InterfaceRole(_require_str(wire["role"])),
+        rendered=_require_str(wire["rendered"]),
+    )
+
+
+def _session_spec_to_wire(spec: InputSessionSpec) -> dict[str, object]:
+    return spec.to_dict()
+
+
+def _parse_session_spec(value: object) -> InputSessionSpec:
+    wire = _require_exact_keys(value, _SESSION_SPEC_KEYS)
+    return InputSessionSpec(
+        duration_ms=_require_int(wire["duration_ms"]),
+        expected_press_count=_require_int(wire["expected_press_count"]),
+        expected_rotation_count=_require_int(wire["expected_rotation_count"]),
+        latency_p95_target_ms=_require_int(wire["latency_p95_target_ms"]),
+        disconnect_grace_ms=_require_int(wire["disconnect_grace_ms"]),
+        key_map=_parse_key_map(wire["key_map"]),
+    )
+
+
+def _parse_key_map(value: object) -> KeyMap:
+    wire = _require_exact_keys(value, _KEY_MAP_KEYS)
+    entries_value = wire["entries"]
+    if not isinstance(entries_value, list):
+        raise ValueError
+    return KeyMap(
+        tuple(_parse_key_map_entry(entry) for entry in entries_value)
+    )
+
+
+def _parse_key_map_entry(value: object) -> KeyMapEntry:
+    wire = _require_exact_keys(value, _KEY_MAP_ENTRY_KEYS)
+    return KeyMapEntry(
+        event_type=_require_int(wire["event_type"]),
+        event_code=_require_int(wire["event_code"]),
+        control_id=_require_int(wire["control_id"]),
+        kind=InputKind(_require_str(wire["kind"])),
+        press_action=InputAction(_require_str(wire["press_action"])),
+    )
+
+
+def _parse_control_count(value: object) -> ControlCount:
+    wire = _require_exact_keys(value, _COUNT_KEYS)
+    return ControlCount(
+        control_id=_require_int(wire["control_id"]),
+        kind=InputKind(_require_str(wire["kind"])),
+        press_count=_require_int(wire["press_count"]),
+        release_count=_require_int(wire["release_count"]),
+        left_count=_require_int(wire["left_count"]),
+        right_count=_require_int(wire["right_count"]),
+    )
+
+
+def _parse_control_mapping(value: object) -> ControlMapping:
+    wire = _require_exact_keys(value, _MAPPING_KEYS)
+    return ControlMapping(
+        control_id=_require_int(wire["control_id"]),
+        kind=InputKind(_require_str(wire["kind"])),
+        event_type=_require_int(wire["event_type"]),
+        event_code=_require_int(wire["event_code"]),
+    )
+
+
+def _input_session_result_to_wire(result: InputSessionResult) -> dict[str, object]:
+    return result.to_dict()
+
+
+def _parse_input_session_result(value: object) -> InputSessionResult:
+    wire = _require_exact_keys(value, _SESSION_RESULT_KEYS)
+    counts_value = wire["counts"]
+    mapping_value = wire["mapping"]
+    if not isinstance(counts_value, list) or not isinstance(mapping_value, list):
+        raise ValueError
+    return InputSessionResult(
+        counts=tuple(_parse_control_count(item) for item in counts_value),
+        latency_p95_ms=_require_int(wire["latency_p95_ms"]),
+        unknown_count=_require_int(wire["unknown_count"]),
+        disconnected=_require_bool(wire["disconnected"]),
+        mapping=tuple(_parse_control_mapping(item) for item in mapping_value),
+    )
+
+
+def _require_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError
+    return value
 
 
 def _profile_to_wire(profile: DeviceProfile) -> dict[str, object]:
@@ -272,6 +530,21 @@ def _manifest_to_wire(manifest: StageManifest) -> dict[str, object]:
         "expected_result": manifest.expected_result,
         "recovery_plan": manifest.recovery_plan,
         "approval_reference": manifest.approval_reference,
+        "role_resolution": (
+            _role_resolution_to_wire(manifest.role_resolution)
+            if manifest.role_resolution is not None
+            else None
+        ),
+        "permission_plan": (
+            _permission_plan_to_wire(manifest.permission_plan)
+            if manifest.permission_plan is not None
+            else None
+        ),
+        "session_spec": (
+            _session_spec_to_wire(manifest.session_spec)
+            if manifest.session_spec is not None
+            else None
+        ),
     }
 
 
@@ -280,6 +553,9 @@ def _parse_manifest(value: object) -> StageManifest:
     steps_value = wire["steps"]
     if not isinstance(steps_value, list):
         raise ValueError
+    role_resolution = wire["role_resolution"]
+    permission_plan = wire["permission_plan"]
+    session_spec = wire["session_spec"]
     return StageManifest(
         stage=Stage(_require_str(wire["stage"])),
         commit=_require_str(wire["commit"]),
@@ -291,6 +567,13 @@ def _parse_manifest(value: object) -> StageManifest:
         recovery_plan=_require_str(wire["recovery_plan"]),
         approval_reference=_require_str(wire["approval_reference"]),
         schema_version=_require_int(wire["schema_version"]),
+        role_resolution=(
+            _parse_role_resolution(role_resolution) if role_resolution is not None else None
+        ),
+        permission_plan=(
+            _parse_permission_plan(permission_plan) if permission_plan is not None else None
+        ),
+        session_spec=_parse_session_spec(session_spec) if session_spec is not None else None,
     )
 
 
@@ -424,15 +707,106 @@ def decode_response(text: str) -> OperationResult:
     return result
 
 
+def encode_session_request(request: IpcSessionRequest) -> str:
+    """Encode one immutable session request as canonical compact JSON."""
+    if not isinstance(request, IpcSessionRequest):
+        _invalid_request()
+    wire = {
+        "schema_version": request.schema_version,
+        "profile": _profile_to_wire(request.profile),
+        "capability": _capability_to_wire(request.capability),
+        "manifest": _manifest_to_wire(request.manifest),
+        "step_index": request.step_index,
+        "command": _command_to_wire(request.command),
+        "device_node": request.device_node,
+    }
+    encoded = json.dumps(wire, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > MAX_REQUEST_BYTES:
+        _invalid_request()
+    return encoded
+
+
+def decode_session_request(text: str) -> IpcSessionRequest:
+    """Decode one session request and collapse every parse failure to a stable error."""
+    try:
+        if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_REQUEST_BYTES:
+            raise ValueError
+        wire = _require_exact_keys(_load_json(text), _SESSION_REQUEST_KEYS)
+        request = IpcSessionRequest(
+            profile=_parse_profile(wire["profile"]),
+            capability=_parse_capability(wire["capability"]),
+            manifest=_parse_manifest(wire["manifest"]),
+            step_index=_require_int(wire["step_index"]),
+            command=_parse_command(wire["command"]),
+            device_node=_require_str(wire["device_node"]),
+            schema_version=_require_int(wire["schema_version"]),
+        )
+    except Exception:
+        _invalid_request()
+    return request
+
+
+def encode_session_response(response: IpcSessionResponse) -> str:
+    """Encode the session envelope with the stable result and the redacted session summary."""
+    if not isinstance(response, IpcSessionResponse):
+        _invalid_response()
+    result = response.result
+    wire = {
+        "schema_version": SCHEMA_VERSION,
+        "status": result.status.value,
+        "error_code": result.error_code.value,
+        "duration_ms": result.duration_ms,
+        "events": [_event_to_wire(event) for event in result.events],
+        "session": (
+            _input_session_result_to_wire(response.session)
+            if response.session is not None
+            else None
+        ),
+    }
+    encoded = json.dumps(wire, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > MAX_RESPONSE_BYTES:
+        _invalid_response()
+    return encoded
+
+
+def decode_session_response(text: str) -> IpcSessionResponse:
+    """Decode one session envelope and collapse every parse failure to a stable error."""
+    try:
+        if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_RESPONSE_BYTES:
+            raise ValueError
+        wire = _require_exact_keys(_load_json(text), _SESSION_RESPONSE_KEYS)
+        if _require_int(wire["schema_version"]) != SCHEMA_VERSION:
+            raise ValueError
+        events_value = wire["events"]
+        if not isinstance(events_value, list):
+            raise ValueError
+        result = OperationResult(
+            status=ResultStatus(_require_str(wire["status"])),
+            error_code=ErrorCode(_require_str(wire["error_code"])),
+            duration_ms=_require_int(wire["duration_ms"]),
+            events=tuple(_parse_event(event) for event in events_value),
+        )
+        session_value = wire["session"]
+        session = (
+            _parse_input_session_result(session_value) if session_value is not None else None
+        )
+    except Exception:
+        _invalid_response()
+    return IpcSessionResponse(result, session)
+
+
 def _runner_failure(
     status: ResultStatus, error_code: ErrorCode, duration_ms: int = 0
 ) -> OperationResult:
     return OperationResult(status, error_code, duration_ms)
 
 
-def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
-    """Run the fixed internal fake helper with a bounded deadline and no caller process controls."""
-    if not isinstance(request, IpcRequest):
+def run_fake_helper(
+    request: IpcRequest | IpcSessionRequest,
+    timeout_ms: int,
+) -> OperationResult | IpcSessionResponse:
+    """Run the fixed internal helper with a bounded deadline and no caller process controls."""
+    if not isinstance(request, (IpcRequest, IpcSessionRequest)):
         raise ValueError("invalid_ipc_request")
     if (
         isinstance(timeout_ms, bool)
@@ -440,11 +814,17 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
         or not 1 <= timeout_ms <= request.manifest.deadline_ms <= MAX_DEADLINE_MS
     ):
         raise ValueError("invalid_timeout")
+    is_session = isinstance(request, IpcSessionRequest)
 
     try:
         completed = subprocess.run(
             [sys.executable, "-I", "-m", "streamdock_n3.hardware.helper_main"],
-            input=encode_request(request) + "\n",
+            input=(
+                encode_session_request(request)
+                if isinstance(request, IpcSessionRequest)
+                else encode_request(request)
+            )
+            + "\n",
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -479,6 +859,8 @@ def run_fake_helper(request: IpcRequest, timeout_ms: int) -> OperationResult:
     if response_size > MAX_FRAMED_RESPONSE_BYTES:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)
     try:
+        if is_session:
+            return decode_session_response(completed.stdout[:-1])
         return decode_response(completed.stdout[:-1])
     except ValueError:
         return _runner_failure(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE)

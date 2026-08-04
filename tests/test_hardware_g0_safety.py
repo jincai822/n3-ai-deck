@@ -70,10 +70,10 @@ REVIEWED_SOURCE_SHA256 = {
         "5dd4e349de72fb2d8963c8c5444ebb87acf776811812ac011e1bcfb444a9d14d"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "c3bf0cb263d6f30d657497c8821982135de78f1707a4aca9610879fff800cc5b"
+        "60c16275e6e87d7a0542a927e4c6e31b04dfa20fc78488b06d8daf242af9efc5"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
-        "f2c43b1cdac1d1b44b73dde3ff1866801e9306dc185329062fdb9c762b0f79ea"
+        "2166e04f94b564e465fb4d3608def19312fb7223ca60a8686e88e6a2ea360ef2"
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
         "38b6996b3a90af16a38aef0c4abebc0259fc5b4c33bb57ee6c058ff00abff0d6"
@@ -254,6 +254,10 @@ def _forbidden_source_violations(path: Path, source: str) -> list[str]:
         # "os.open" appears only as the single O_RDONLY open inside
         # EvdevReadOnlyBackend.open_read_only; the module never writes.
         violations = [forbidden for forbidden in violations if forbidden != "os.open"]
+    if path == Path("src/streamdock_n3/hardware/ipc.py"):
+        # "/dev/input" appears only as the device-node validation regex
+        # constant; ipc.py never accesses device nodes itself.
+        violations = [forbidden for forbidden in violations if forbidden != "/dev/input"]
     return violations
 
 
@@ -1545,6 +1549,10 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         "0123456789abcdef",
     )
     request = ipc.IpcRequest(profile, capability_snapshot, manifest, 0, command)
+    session_request = ipc.IpcSessionRequest(
+        profile, capability_snapshot, manifest, 0, command, "/dev/input/event12"
+    )
+    session_response = ipc.IpcSessionResponse(result, None)
     evidence_disposition = evidence.EvidenceDisposition(
         evidence.EvidenceDisposition.ATTEMPT.value
     )
@@ -1603,6 +1611,8 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             evdev_backend,
             session_error,
             key_map_entry,
+            session_request,
+            session_response,
             key_map,
             raw_event,
             session_spec,

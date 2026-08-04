@@ -1,21 +1,37 @@
-"""Entry point for the isolated fake-only hardware helper."""
+"""Entry point for the isolated read-only hardware helper."""
 
 from __future__ import annotations
 
 import sys
+import time
 
 from streamdock_n3.hardware.backend import FakeBackend
-from streamdock_n3.hardware.contracts import ErrorCode, OperationResult, ResultStatus
+from streamdock_n3.hardware.contracts import (
+    ErrorCode,
+    OperationResult,
+    ResultStatus,
+    Stage,
+)
 from streamdock_n3.hardware.gate import CommandPolicy, GateViolation
+from streamdock_n3.hardware.input_session import (
+    EvdevReadOnlyBackend,
+    InputSessionError,
+    run_input_session,
+)
 from streamdock_n3.hardware.ipc import (
     MAX_FRAMED_REQUEST_BYTES,
     REQUEST_READ_BYTES,
+    IpcRequest,
+    IpcSessionRequest,
+    IpcSessionResponse,
     decode_request,
+    decode_session_request,
     encode_response,
+    encode_session_response,
 )
 
 
-def _handle_request() -> OperationResult:
+def _read_framed_payload() -> str:
     raw = sys.stdin.buffer.read(REQUEST_READ_BYTES)
     if len(raw) > MAX_FRAMED_REQUEST_BYTES:
         raise ValueError
@@ -25,8 +41,48 @@ def _handle_request() -> OperationResult:
     payload = text[:-1]
     if not payload:
         raise ValueError
+    return payload
 
-    request = decode_request(payload)
+
+def _run_session(request: IpcSessionRequest) -> IpcSessionResponse:
+    spec = request.manifest.session_spec
+    if spec is None or request.manifest.stage is not Stage.G3_INPUT:
+        raise ValueError
+    CommandPolicy.validate(
+        request.profile,
+        request.capability,
+        request.manifest,
+        request.step_index,
+        request.command,
+    )
+    started_ns = time.monotonic_ns()
+    try:
+        session = run_input_session(spec, request.device_node, EvdevReadOnlyBackend())
+    except InputSessionError as error:
+        return IpcSessionResponse(
+            OperationResult(ResultStatus.REJECTED, error.code, 0),
+            None,
+        )
+    duration_ms = int((time.monotonic_ns() - started_ns) / 1_000_000)
+    if session.disconnected:
+        result = OperationResult(
+            ResultStatus.DISCONNECTED,
+            ErrorCode.DEVICE_DISCONNECTED,
+            duration_ms,
+        )
+    else:
+        result = OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, duration_ms)
+    return IpcSessionResponse(result, session)
+
+
+def _handle_request() -> OperationResult | IpcSessionResponse:
+    payload = _read_framed_payload()
+    try:
+        request: IpcRequest | IpcSessionRequest = decode_request(payload)
+    except ValueError:
+        request = decode_session_request(payload)
+    if isinstance(request, IpcSessionRequest):
+        return _run_session(request)
     CommandPolicy.validate(
         request.profile,
         request.capability,
@@ -40,14 +96,23 @@ def _handle_request() -> OperationResult:
 def main() -> int:
     """Read one bounded request and emit one stable response."""
     try:
-        result = _handle_request()
+        handled = _handle_request()
     except GateViolation as error:
         result = OperationResult(ResultStatus.REJECTED, error.code, 0)
+        sys.stdout.write(encode_response(result) + "\n")
+        return 0
     except (UnicodeDecodeError, ValueError):
         result = OperationResult(ResultStatus.REJECTED, ErrorCode.MANIFEST_INVALID, 0)
+        sys.stdout.write(encode_response(result) + "\n")
+        return 0
     except Exception:
         result = OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.BACKEND_FAILURE, 0)
-    sys.stdout.write(encode_response(result) + "\n")
+        sys.stdout.write(encode_response(result) + "\n")
+        return 0
+    if isinstance(handled, IpcSessionResponse):
+        sys.stdout.write(encode_session_response(handled) + "\n")
+    else:
+        sys.stdout.write(encode_response(handled) + "\n")
     return 0
 
 
