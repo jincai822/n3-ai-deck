@@ -105,6 +105,7 @@ class ErrorCode(StrEnum):
     EVIDENCE_FAILURE = "evidence_failure"
     INTERFACE_AMBIGUITY = "interface_ambiguity"
     PROFILE_EVIDENCE_INCOMPLETE = "profile_evidence_incomplete"
+    PERMISSION_PLAN_INVALID = "permission_plan_invalid"
 
 
 class RecoveryStatus(StrEnum):
@@ -131,6 +132,71 @@ class RoleBasis(StrEnum):
 class RoleResolutionStatus(StrEnum):
     RESOLVED = "resolved"
     AMBIGUOUS = "ambiguous"
+
+
+class PermissionKind(StrEnum):
+    TEMPORARY_ACL = "temporary_acl"
+    PERSISTENT_RULE = "persistent_rule"
+
+
+_ROLE_SUBSYSTEMS = {
+    InterfaceRole.INPUT.value: "input",
+    InterfaceRole.CONTROL.value: "hidraw",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionArtifact:
+    kind: PermissionKind
+    subsystem: str
+    role: InterfaceRole
+    rendered: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, PermissionKind):
+            raise TypeError("kind must be a PermissionKind")
+        if not isinstance(self.role, InterfaceRole):
+            raise TypeError("role must be an InterfaceRole")
+        if not isinstance(self.subsystem, str) or not self.subsystem:
+            raise ValueError("subsystem must be a non-empty string")
+        if not isinstance(self.rendered, str) or not self.rendered:
+            raise ValueError("rendered must be a non-empty string")
+        expected = _ROLE_SUBSYSTEMS.get(self.role.value)
+        if expected is None or self.subsystem != expected:
+            raise ValueError(f"role {self.role.value} does not justify subsystem {self.subsystem}")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind.value,
+            "subsystem": self.subsystem,
+            "role": self.role.value,
+            "rendered": self.rendered,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionPlan:
+    artifacts: tuple[PermissionArtifact, ...]
+    approval_reference: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.artifacts, tuple) or len(self.artifacts) < 2:
+            raise ValueError("artifacts must be a tuple of at least two PermissionArtifact values")
+        if not all(isinstance(artifact, PermissionArtifact) for artifact in self.artifacts):
+            raise TypeError("artifacts must contain PermissionArtifact values")
+        pairs = [(artifact.kind, artifact.subsystem) for artifact in self.artifacts]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("artifacts must have unique kind/subsystem pairs")
+        _validate_safe_token(self.approval_reference, "approval_reference")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "approval_reference": self.approval_reference,
+            "artifacts": [artifact.to_dict() for artifact in self.artifacts],
+        }
+
+    def digest(self) -> str:
+        return _canonical_digest(self.to_dict())
 
 
 def _canonical_digest(value: object) -> str:
@@ -435,6 +501,7 @@ class StageManifest:
     approval_reference: str
     schema_version: int = SCHEMA_VERSION
     role_resolution: InterfaceRoleResolution | None = None
+    permission_plan: PermissionPlan | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.stage, Stage):
@@ -458,6 +525,10 @@ class StageManifest:
             self.role_resolution, InterfaceRoleResolution
         ):
             raise TypeError("role_resolution must be an InterfaceRoleResolution or None")
+        if self.permission_plan is not None and not isinstance(
+            self.permission_plan, PermissionPlan
+        ):
+            raise TypeError("permission_plan must be a PermissionPlan or None")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -473,6 +544,9 @@ class StageManifest:
             "approval_reference": self.approval_reference,
             "role_resolution": (
                 self.role_resolution.to_dict() if self.role_resolution is not None else None
+            ),
+            "permission_plan": (
+                self.permission_plan.to_dict() if self.permission_plan is not None else None
             ),
         }
 

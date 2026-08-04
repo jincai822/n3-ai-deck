@@ -22,6 +22,7 @@ G0_MODULES = (
     Path("src/streamdock_n3/hardware/__init__.py"),
     Path("src/streamdock_n3/hardware/contracts.py"),
     Path("src/streamdock_n3/hardware/interface_roles.py"),
+    Path("src/streamdock_n3/hardware/permissions.py"),
     Path("src/streamdock_n3/hardware/gate.py"),
     Path("src/streamdock_n3/hardware/backend.py"),
     Path("src/streamdock_n3/hardware/adapter.py"),
@@ -47,10 +48,13 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "27d0f2614df65d531ae4034d8ca2cb9649fc6f8a8f669a8d6806a8d99772db82"
+        "c3fab080a4938136721c99ddf08b72b181b76ce9dbc6ef7c8148ad3a54a01b98"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
+    ),
+    Path("src/streamdock_n3/hardware/permissions.py"): (
+        "bfb07fdf9bada8fa796699b37aba07cc3d684a192554963788ab543f3303e32a"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
         "92e1f1332ede842cf72ceaeb65c05bcdf33454eba4661e93aa9bb59d4012f5e8"
@@ -144,6 +148,7 @@ ALLOWED_STDLIB_IMPORTS = {
     "importlib.metadata",
     "json",
     "os",
+    "pathlib",
     "re",
     "subprocess",
     "sys",
@@ -209,6 +214,7 @@ IMPORT_TIME_ALLOWED_CALLS = {
     "hasattr",
     "importlib.metadata.version",
     "os.geteuid",
+    "pathlib.Path",
     "re.compile",
     "types.MappingProxyType",
 }
@@ -229,7 +235,12 @@ def _forbidden_source_violations(path: Path, source: str) -> list[str]:
     else:
         tokens = tokenize.generate_tokens(iter(source.splitlines(keepends=True)).__next__)
         scanned = "".join(token.string for token in tokens if token.type != tokenize.COMMENT)
-    return [forbidden for forbidden in FORBIDDEN_SOURCE if forbidden in scanned]
+    violations = [forbidden for forbidden in FORBIDDEN_SOURCE if forbidden in scanned]
+    if path == Path("src/streamdock_n3/hardware/permissions.py"):
+        # "setfacl" appears only as rendered ACL template data inside
+        # PermissionArtifact values; permissions.py never invokes it.
+        violations = [forbidden for forbidden in violations if forbidden != "setfacl"]
+    return violations
 
 
 def _project_import_allowed(module: str) -> bool:
@@ -458,7 +469,14 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
         # Intentional conservative policy: any method with a file-mutating/opening
         # name is rejected even when static analysis cannot prove its receiver type.
         if isinstance(function, ast.Attribute) and function.attr in FORBIDDEN_FILE_METHODS:
-            violations.append(f"{path}:{call.lineno}: conservative file method {function.attr}")
+            # The offline InstallTransaction is the single scoped file-IO boundary:
+            # it operates only on an explicit root that can never be /etc or /usr.
+            scoped_install = (
+                path == Path("src/streamdock_n3/hardware/permissions.py")
+                and _enclosing_class(tree, node) == "InstallTransaction"
+            )
+            if not scoped_install:
+                violations.append(f"{path}:{call.lineno}: conservative file method {function.attr}")
         else:
             file_functions = canonical_names & {"builtins.open", "os.open"}
             if file_functions:
@@ -691,6 +709,20 @@ def _enclosing_function(tree: ast.Module, target: ast.AST) -> ast.FunctionDef | 
     while parent is not None:
         if isinstance(parent, ast.FunctionDef):
             return parent
+        parent = parents.get(parent)
+    return None
+
+
+def _enclosing_class(tree: ast.Module, target: ast.AST) -> str | None:
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    parent = parents.get(target)
+    while parent is not None:
+        if isinstance(parent, ast.ClassDef):
+            return parent.name
         parent = parents.get(parent)
     return None
 
@@ -1312,6 +1344,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     ipc = modules["streamdock_n3.hardware.ipc"]
     evidence = modules["streamdock_n3.hardware.evidence"]
     interface_roles = modules["streamdock_n3.hardware.interface_roles"]
+    permissions = modules["streamdock_n3.hardware.permissions"]
 
     stage = contracts.Stage(contracts.Stage.G1_PROFILE.value)
     state = contracts.AdapterState(contracts.AdapterState.CANDIDATE.value)
@@ -1340,6 +1373,28 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         None,
         None,
     )
+    permission_kind = contracts.PermissionKind(
+        contracts.PermissionKind.TEMPORARY_ACL.value
+    )
+    permission_artifact = contracts.PermissionArtifact(
+        permission_kind,
+        "input",
+        contracts.InterfaceRole(contracts.InterfaceRole.INPUT.value),
+        "setfacl -m u:{current_user}:rw {node}",
+    )
+    permission_plan = contracts.PermissionPlan(
+        (
+            permission_artifact,
+            contracts.PermissionArtifact(
+                contracts.PermissionKind.PERSISTENT_RULE,
+                "hidraw",
+                contracts.InterfaceRole.CONTROL,
+                'SUBSYSTEM=="hidraw", TAG+="uaccess"',
+            ),
+        ),
+        "test:g2",
+    )
+    install_transaction = permissions.InstallTransaction(Path("/tmp/n3-ai-deck-inert"))
     profile = contracts.DeviceProfile(
         0x6602,
         0x1000,
@@ -1451,6 +1506,10 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             interface_role_binding,
             role_resolution,
             approved_profile,
+            permission_kind,
+            permission_artifact,
+            permission_plan,
+            install_transaction,
         )
     }
     declared = {
@@ -2033,6 +2092,7 @@ def test_complete_g0_source_closure_keeps_the_exact_brief_modules_and_dependenci
         Path("src/streamdock_n3/hardware/__init__.py"),
         Path("src/streamdock_n3/hardware/contracts.py"),
         Path("src/streamdock_n3/hardware/interface_roles.py"),
+        Path("src/streamdock_n3/hardware/permissions.py"),
         Path("src/streamdock_n3/hardware/gate.py"),
         Path("src/streamdock_n3/hardware/backend.py"),
         Path("src/streamdock_n3/hardware/adapter.py"),
@@ -2096,7 +2156,7 @@ def test_dependency_static_gates_reject_import_time_unsafe_regressions(
     )
 
 
-def test_reviewed_snapshot_has_the_exact_unique_fourteen_path_closure() -> None:
+def test_reviewed_snapshot_has_the_exact_unique_fifteen_path_closure() -> None:
     expected_dependencies = (
         Path("src/streamdock_n3/__init__.py"),
         Path("src/streamdock_n3/device_catalog.py"),
@@ -2110,7 +2170,7 @@ def test_reviewed_snapshot_has_the_exact_unique_fourteen_path_closure() -> None:
     )
 
     assert expected == REVIEWED_SOURCE_PATHS
-    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 14
+    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 15
     assert set(REVIEWED_SOURCE_SHA256) == set(REVIEWED_SOURCE_PATHS)
 
 

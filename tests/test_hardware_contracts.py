@@ -20,6 +20,9 @@ from streamdock_n3.hardware.contracts import (
     NormalizedInputEvent,
     Operation,
     OperationResult,
+    PermissionArtifact,
+    PermissionKind,
+    PermissionPlan,
     ResultStatus,
     RoleBasis,
     RoleResolutionStatus,
@@ -336,3 +339,85 @@ def test_manifest_accepts_role_resolution_field() -> None:
 
     assert manifest.role_resolution is resolved
     assert manifest.digest() != make_manifest(Stage.G1_PROFILE).digest()
+
+
+def _permission_plan() -> PermissionPlan:
+    return PermissionPlan(
+        (
+            PermissionArtifact(
+                PermissionKind.TEMPORARY_ACL,
+                "input",
+                InterfaceRole.INPUT,
+                "setfacl -m u:{current_user}:rw {node}",
+            ),
+            PermissionArtifact(
+                PermissionKind.PERSISTENT_RULE,
+                "hidraw",
+                InterfaceRole.CONTROL,
+                'SUBSYSTEM=="hidraw", TAG+="uaccess"',
+            ),
+        ),
+        "test:g2",
+    )
+
+
+def test_permission_artifact_validation_fails_closed() -> None:
+    with pytest.raises((TypeError, ValueError)):
+        PermissionArtifact("custom", "input", InterfaceRole.INPUT, "text")
+    with pytest.raises(ValueError):
+        PermissionArtifact(PermissionKind.TEMPORARY_ACL, "input", InterfaceRole.INPUT, "")
+    with pytest.raises(ValueError):
+        PermissionArtifact(PermissionKind.TEMPORARY_ACL, "bluetooth", InterfaceRole.INPUT, "text")
+    with pytest.raises(ValueError):
+        PermissionArtifact(
+            PermissionKind.TEMPORARY_ACL, "input", InterfaceRole.UNKNOWN, "text"
+        )
+
+
+def test_permission_plan_validation_fails_closed() -> None:
+    with pytest.raises(ValueError):
+        PermissionPlan((), "test:g2")
+    with pytest.raises(ValueError):
+        PermissionPlan((_permission_plan().artifacts[0],), "test:g2")
+    with pytest.raises(ValueError):
+        PermissionPlan(
+            (
+                _permission_plan().artifacts[0],
+                _permission_plan().artifacts[0],
+            ),
+            "test:g2",
+        )
+    with pytest.raises(ValueError):
+        PermissionPlan(_permission_plan().artifacts, "unsafe value")
+
+
+def test_permission_plan_digest_is_stable_and_redacted() -> None:
+    plan = _permission_plan()
+
+    assert len(plan.digest()) == 64
+    assert plan.digest() == _permission_plan().digest()
+    assert plan.to_dict() == {
+        "approval_reference": "test:g2",
+        "artifacts": [
+            {
+                "kind": "temporary_acl",
+                "subsystem": "input",
+                "role": "input",
+                "rendered": "setfacl -m u:{current_user}:rw {node}",
+            },
+            {
+                "kind": "persistent_rule",
+                "subsystem": "hidraw",
+                "role": "control",
+                "rendered": 'SUBSYSTEM=="hidraw", TAG+="uaccess"',
+            },
+        ],
+    }
+
+
+def test_manifest_accepts_permission_plan_field() -> None:
+    plan = _permission_plan()
+    manifest = replace(make_manifest(Stage.G2_PERMISSION), permission_plan=plan)
+
+    assert manifest.permission_plan is plan
+    assert manifest.digest() != make_manifest(Stage.G2_PERMISSION).digest()
