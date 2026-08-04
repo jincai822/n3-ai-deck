@@ -16,6 +16,7 @@ from streamdock_n3.hardware.contracts import (
     OperationResult,
     RecoveryStatus,
     ResultStatus,
+    RoleResolutionStatus,
     Stage,
     StageManifest,
     StagePhase,
@@ -26,7 +27,17 @@ from streamdock_n3.hardware.gate import (
     GateViolation,
     _CapabilityGate,
 )
-from tests.hardware_fixtures import TEST_COMMIT, TEST_IMAGE, make_manifest, make_profile
+from tests.hardware_fixtures import (
+    TEST_COMMIT,
+    TEST_IMAGE,
+    make_ambiguous_roles,
+    make_g1_manifest,
+    make_incomplete_g1_manifest,
+    make_manifest,
+    make_profile,
+    make_resolved_roles,
+    make_swapped_roles,
+)
 
 
 def success() -> OperationResult:
@@ -69,8 +80,14 @@ def recovery_commands(stage: Stage) -> tuple[AdapterCommand, ...]:
     return commands[stage]
 
 
+def hardware_manifest(stage: Stage) -> StageManifest:
+    if stage is Stage.G1_PROFILE:
+        return make_g1_manifest()
+    return make_manifest(stage, role_resolution=make_resolved_roles())
+
+
 def complete_stage(gate: _CapabilityGate, stage: Stage) -> AdapterState:
-    gate.begin(make_profile(), make_manifest(stage), TEST_COMMIT)
+    gate.begin(make_profile(), hardware_manifest(stage), TEST_COMMIT)
     for command in forward_commands(stage):
         reservation = gate.reserve_forward(command)
         gate.settle(reservation, success())
@@ -105,7 +122,7 @@ def advance_to(stage: Stage) -> _CapabilityGate:
 
 def ready_g1_gate() -> _CapabilityGate:
     gate = _CapabilityGate()
-    gate.begin(make_profile(), make_manifest(Stage.G1_PROFILE), TEST_COMMIT)
+    gate.begin(make_profile(), make_g1_manifest(), TEST_COMMIT)
     reservation = gate.reserve_forward(AdapterCommand(Operation.APPROVE_PROFILE))
     gate.settle(reservation, success())
     return gate
@@ -113,7 +130,7 @@ def ready_g1_gate() -> _CapabilityGate:
 
 def test_reservation_does_not_count_as_success_without_a_result() -> None:
     gate = _CapabilityGate()
-    manifest = make_manifest(Stage.G1_PROFILE)
+    manifest = make_g1_manifest()
     command = AdapterCommand(Operation.APPROVE_PROFILE)
     gate.begin(make_profile(), manifest, TEST_COMMIT)
 
@@ -131,7 +148,7 @@ def test_reservation_does_not_count_as_success_without_a_result() -> None:
 
 def test_only_the_exact_pending_reservation_can_settle() -> None:
     gate = _CapabilityGate()
-    gate.begin(make_profile(), make_manifest(Stage.G1_PROFILE), TEST_COMMIT)
+    gate.begin(make_profile(), make_g1_manifest(), TEST_COMMIT)
     reservation = gate.reserve_forward(AdapterCommand(Operation.APPROVE_PROFILE))
     stale = replace(reservation, epoch=reservation.epoch + 1)
 
@@ -147,20 +164,20 @@ def test_only_the_exact_pending_reservation_can_settle() -> None:
     (
         (
             replace(make_profile(), bcd_device=0x0301),
-            make_manifest(Stage.G2_PERMISSION),
+            hardware_manifest(Stage.G2_PERMISSION),
             TEST_COMMIT,
         ),
         (
             replace(make_profile(), interface=HidInterface(1, 3, 1, 1)),
-            make_manifest(Stage.G2_PERMISSION),
+            hardware_manifest(Stage.G2_PERMISSION),
             TEST_COMMIT,
         ),
         (
             make_profile(),
-            replace(make_manifest(Stage.G2_PERMISSION), profile_digest="0" * 64),
+            replace(hardware_manifest(Stage.G2_PERMISSION), profile_digest="0" * 64),
             TEST_COMMIT,
         ),
-        (make_profile(), make_manifest(Stage.G2_PERMISSION), "fedcba9876543210"),
+        (make_profile(), hardware_manifest(Stage.G2_PERMISSION), "fedcba9876543210"),
     ),
 )
 def test_g1_commit_pins_identity_and_later_drift_blocks(
@@ -177,9 +194,95 @@ def test_g1_commit_pins_identity_and_later_drift_blocks(
     assert gate.state is AdapterState.BLOCKED
 
 
-def test_forward_and_recovery_are_exact_and_lifo() -> None:
+def test_g1_begin_rejects_ambiguous_role_resolution() -> None:
+    gate = _CapabilityGate()
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), make_g1_manifest(ambiguous=True), TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.INTERFACE_AMBIGUITY
+    assert gate.state is AdapterState.CANDIDATE
+
+
+def test_g1_begin_rejects_missing_role_resolution() -> None:
+    gate = _CapabilityGate()
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), make_incomplete_g1_manifest(), TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.PROFILE_EVIDENCE_INCOMPLETE
+    assert gate.state is AdapterState.CANDIDATE
+
+
+def test_g1_begin_ambiguity_keeps_priority_after_identity_validation() -> None:
+    gate = _CapabilityGate()
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(
+            make_profile(),
+            replace(
+                make_g1_manifest(ambiguous=True),
+                profile_digest="0" * 64,
+            ),
+            TEST_COMMIT,
+        )
+
+    assert raised.value.code is ErrorCode.MANIFEST_INVALID
+
+
+def test_g1_commit_pins_roles_and_later_role_drift_blocks() -> None:
+    gate = _CapabilityGate()
+    gate.begin(make_profile(), make_g1_manifest(), TEST_COMMIT)
+    reservation = gate.reserve_forward(AdapterCommand(Operation.APPROVE_PROFILE))
+    gate.settle(reservation, success())
+    preview = gate.preview_completion(True, None)
+    assert gate.commit(preview, lambda: None) is AdapterState.PROFILE_APPROVED
+
+    assert gate.approved_roles is not None
+    assert gate.approved_roles.status is RoleResolutionStatus.RESOLVED
+
+    drifted = make_manifest(
+        Stage.G2_PERMISSION,
+        role_resolution=make_ambiguous_roles(),
+    )
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), drifted, TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.PROFILE_MISMATCH
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_later_stage_with_drifted_roles_blocks() -> None:
+    gate = advance_through_g1()
+
+    drifted = make_manifest(Stage.G3_INPUT, role_resolution=make_swapped_roles())
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), drifted, TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.PROFILE_MISMATCH
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_later_stage_with_missing_roles_blocks() -> None:
+    gate = advance_through_g1()
+
+    with pytest.raises(GateViolation) as raised:
+        gate.begin(make_profile(), make_manifest(Stage.G3_INPUT), TEST_COMMIT)
+
+    assert raised.value.code is ErrorCode.PROFILE_MISMATCH
+    assert gate.state is AdapterState.BLOCKED
+
+
+def test_later_stage_with_matching_roles_is_allowed() -> None:
+    gate = advance_through_g1()
+
+    gate.begin(make_profile(), hardware_manifest(Stage.G2_PERMISSION), TEST_COMMIT)
+
+    assert gate.session_snapshot is not None
+    assert gate.session_snapshot.stage is Stage.G2_PERMISSION
     gate = advance_to(Stage.G7_SIX_LCD)
-    manifest = make_manifest(Stage.G7_SIX_LCD)
+    manifest = hardware_manifest(Stage.G7_SIX_LCD)
     gate.begin(make_profile(), manifest, TEST_COMMIT)
 
     for key, _step in enumerate(manifest.steps, start=1):
@@ -195,7 +298,7 @@ def test_forward_and_recovery_are_exact_and_lifo() -> None:
 
 def test_premature_recovery_reservation_during_forward_blocks_fail_closed() -> None:
     gate = advance_to(Stage.G7_SIX_LCD)
-    gate.begin(make_profile(), make_manifest(Stage.G7_SIX_LCD), TEST_COMMIT)
+    gate.begin(make_profile(), hardware_manifest(Stage.G7_SIX_LCD), TEST_COMMIT)
     first = gate.reserve_forward(forward_commands(Stage.G7_SIX_LCD)[0])
     gate.settle(first, success())
     assert gate.capability_snapshot.phase is StagePhase.FORWARD
@@ -218,7 +321,7 @@ def test_premature_recovery_reservation_during_forward_blocks_fail_closed() -> N
 
 def test_disconnect_is_distinct_and_clears_all_queues() -> None:
     gate = _CapabilityGate()
-    gate.begin(make_profile(), make_manifest(Stage.G1_PROFILE), TEST_COMMIT)
+    gate.begin(make_profile(), make_g1_manifest(), TEST_COMMIT)
     reservation = gate.reserve_forward(AdapterCommand(Operation.APPROVE_PROFILE))
 
     gate.settle(
@@ -244,7 +347,7 @@ def test_precommit_callback_failure_never_advances_state() -> None:
 
 def test_forward_machine_failure_keeps_only_earned_recovery() -> None:
     gate = advance_to(Stage.G7_SIX_LCD)
-    gate.begin(make_profile(), make_manifest(Stage.G7_SIX_LCD), TEST_COMMIT)
+    gate.begin(make_profile(), hardware_manifest(Stage.G7_SIX_LCD), TEST_COMMIT)
     first = gate.reserve_forward(forward_commands(Stage.G7_SIX_LCD)[0])
     gate.settle(first, success())
     second = gate.reserve_forward(forward_commands(Stage.G7_SIX_LCD)[1])
@@ -261,7 +364,7 @@ def test_forward_machine_failure_keeps_only_earned_recovery() -> None:
 
 def test_recovery_machine_failure_clears_recovery_and_becomes_ready() -> None:
     gate = advance_to(Stage.G5_BRIGHTNESS)
-    gate.begin(make_profile(), make_manifest(Stage.G5_BRIGHTNESS), TEST_COMMIT)
+    gate.begin(make_profile(), hardware_manifest(Stage.G5_BRIGHTNESS), TEST_COMMIT)
     forward = gate.reserve_forward(forward_commands(Stage.G5_BRIGHTNESS)[0])
     gate.settle(forward, success())
     recovery = gate.reserve_recovery(recovery_commands(Stage.G5_BRIGHTNESS)[0])
@@ -277,7 +380,7 @@ def test_recovery_machine_failure_clears_recovery_and_becomes_ready() -> None:
 
 def test_fail_evidence_validates_and_settles_pending_reservation() -> None:
     gate = _CapabilityGate()
-    gate.begin(make_profile(), make_manifest(Stage.G1_PROFILE), TEST_COMMIT)
+    gate.begin(make_profile(), make_g1_manifest(), TEST_COMMIT)
     reservation = gate.reserve_forward(AdapterCommand(Operation.APPROVE_PROFILE))
 
     gate.fail_evidence(reservation)
@@ -304,7 +407,7 @@ def test_candidate_manifest_failure_does_not_mutate_state() -> None:
     with pytest.raises(GateViolation) as raised:
         gate.begin(
             make_profile(),
-            replace(make_manifest(Stage.G1_PROFILE), commit="fedcba9876543210"),
+            replace(make_g1_manifest(), commit="fedcba9876543210"),
             TEST_COMMIT,
         )
 
@@ -347,7 +450,7 @@ def test_command_policy_accepts_candidate_g1_without_pinned_identity() -> None:
         CommandPolicy.validate(
             profile,
             capability,
-            make_manifest(Stage.G1_PROFILE),
+            make_g1_manifest(),
             0,
             AdapterCommand(Operation.APPROVE_PROFILE),
         )
@@ -357,14 +460,14 @@ def test_command_policy_accepts_candidate_g1_without_pinned_identity() -> None:
 
 def test_command_policy_rejects_wrong_order_or_profile_binding() -> None:
     gate = advance_through_g1()
-    gate.begin(make_profile(), make_manifest(Stage.G2_PERMISSION), TEST_COMMIT)
+    gate.begin(make_profile(), hardware_manifest(Stage.G2_PERMISSION), TEST_COMMIT)
     capability = gate.capability_snapshot
 
     with pytest.raises(GateViolation) as raised:
         CommandPolicy.validate(
             make_profile(),
             capability,
-            make_manifest(Stage.G2_PERMISSION),
+            hardware_manifest(Stage.G2_PERMISSION),
             True,  # type: ignore[arg-type]
             AdapterCommand(Operation.RECORD_PERMISSION),
         )
@@ -374,7 +477,7 @@ def test_command_policy_rejects_wrong_order_or_profile_binding() -> None:
         CommandPolicy.validate(
             replace(make_profile(), bcd_device=0x0301),
             capability,
-            make_manifest(Stage.G2_PERMISSION),
+            hardware_manifest(Stage.G2_PERMISSION),
             0,
             AdapterCommand(Operation.RECORD_PERMISSION),
         )
@@ -397,7 +500,7 @@ def test_command_policy_rejects_pinned_identity_for_g1() -> None:
         CommandPolicy.validate(
             profile,
             capability,
-            make_manifest(Stage.G1_PROFILE),
+            make_g1_manifest(),
             0,
             AdapterCommand(Operation.APPROVE_PROFILE),
         )

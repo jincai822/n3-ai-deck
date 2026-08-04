@@ -53,13 +53,13 @@ REVIEWED_SOURCE_SHA256 = {
         "98ac546f4f377e9506f47ead989e670cbd7c94748b0d8da2853714b9bdbcd007"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "d7a062c37e031c822ff9ecee32495ae888a0878b2b0f95e354b30ca7e7c7f6a5"
+        "92e1f1332ede842cf72ceaeb65c05bcdf33454eba4661e93aa9bb59d4012f5e8"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "a15cfaaa167d6fe117a879dd617f046aafa15c7af2abfa5a94b40d680bb2651d"
+        "4f7c0bbbd6a98ce82bd8513fa44ce01fc14c9c2aa9f8587cc9884988d86ef1ba"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
         "c3bf0cb263d6f30d657497c8821982135de78f1707a4aca9610879fff800cc5b"
@@ -1375,6 +1375,31 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     session_snapshot = contracts.StageSessionSnapshot(stage, stage_phase, 0, 0, False)
     gate_violation = gate.GateViolation(contracts.ErrorCode.STATE_NOT_ALLOWED)
     n3_adapter = adapter.N3Adapter(profile, "0123456789abcdef", fake_backend)
+    approved_profile = adapter.ApprovedProfile(
+        profile.digest(),
+        profile.bcd_device,
+        interface,
+        contracts.HidInterface(1, 3, 1, 1),
+        contracts.InterfaceRoleResolution(
+            (
+                contracts.HidInterfaceRole(
+                    interface,
+                    contracts.InterfaceRole.UNKNOWN,
+                    (contracts.RoleBasis.HID_INTERFACE,),
+                ),
+                contracts.HidInterfaceRole(
+                    contracts.HidInterface(1, 3, 0, 0),
+                    contracts.InterfaceRole.UNKNOWN,
+                    (contracts.RoleBasis.HID_INTERFACE,),
+                ),
+            ),
+            contracts.RoleResolutionStatus.AMBIGUOUS,
+            None,
+            None,
+        ).digest(),
+        "test:g1",
+        "0123456789abcdef",
+    )
     request = ipc.IpcRequest(profile, capability_snapshot, manifest, 0, command)
     evidence_disposition = evidence.EvidenceDisposition(
         evidence.EvidenceDisposition.ATTEMPT.value
@@ -1425,6 +1450,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             resolution_status,
             interface_role_binding,
             role_resolution,
+            approved_profile,
         )
     }
     declared = {

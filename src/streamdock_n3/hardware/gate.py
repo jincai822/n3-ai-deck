@@ -15,10 +15,12 @@ from streamdock_n3.hardware.contracts import (
     DeviceProfile,
     ErrorCode,
     HidInterface,
+    InterfaceRoleResolution,
     Operation,
     OperationResult,
     RecoveryStatus,
     ResultStatus,
+    RoleResolutionStatus,
     Stage,
     StageManifest,
     StagePhase,
@@ -104,6 +106,7 @@ class _CapabilityGate:
         self._bcd_device: int | None = None
         self._interface: HidInterface | None = None
         self._pinned_commit: str | None = None
+        self._approved_roles: InterfaceRoleResolution | None = None
         self._session_profile_bcd_device: int | None = None
         self._manifest: StageManifest | None = None
         self._phase: StagePhase | None = None
@@ -117,6 +120,10 @@ class _CapabilityGate:
     @property
     def state(self) -> AdapterState:
         return self._state
+
+    @property
+    def approved_roles(self) -> InterfaceRoleResolution | None:
+        return self._approved_roles
 
     @property
     def capability_snapshot(self) -> CapabilitySnapshot:
@@ -170,12 +177,18 @@ class _CapabilityGate:
         if self._profile_digest is None:
             if manifest.stage is not Stage.G1_PROFILE or not identity_matches:
                 raise GateViolation(ErrorCode.MANIFEST_INVALID)
+            role_resolution = manifest.role_resolution
+            if role_resolution is None:
+                raise GateViolation(ErrorCode.PROFILE_EVIDENCE_INCOMPLETE)
+            if role_resolution.status is not RoleResolutionStatus.RESOLVED:
+                raise GateViolation(ErrorCode.INTERFACE_AMBIGUITY)
         elif not (
             identity_matches
             and self._profile_digest == profile_digest
             and self._bcd_device == profile.bcd_device
             and self._interface == profile.interface
             and self._pinned_commit == current_commit
+            and manifest.role_resolution == self._approved_roles
         ):
             self._block_and_clear()
             raise GateViolation(ErrorCode.PROFILE_MISMATCH)
@@ -345,6 +358,7 @@ class _CapabilityGate:
             self._bcd_device = self._session_profile_bcd_device
             self._interface = manifest.interface
             self._pinned_commit = manifest.commit
+            self._approved_roles = manifest.role_resolution
         self._state = preview.next_state
         self._clear_session()
         self._epoch += 1

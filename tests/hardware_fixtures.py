@@ -7,9 +7,14 @@ from streamdock_n3.hardware.contracts import (
     CommandStep,
     DeviceProfile,
     HidInterface,
+    InterfaceRoleResolution,
     Operation,
     Stage,
     StageManifest,
+)
+from streamdock_n3.hardware.interface_roles import (
+    InterfaceRoleEvidence,
+    resolve_roles,
 )
 
 TEST_COMMIT = "0123456789abcdef"
@@ -29,6 +34,44 @@ def make_profile() -> DeviceProfile:
     )
 
 
+def make_resolved_roles() -> InterfaceRoleResolution:
+    return resolve_roles(
+        (
+            InterfaceRoleEvidence(HidInterface(0, 3, 0, 0), False, None),
+            InterfaceRoleEvidence(HidInterface(1, 3, 1, 1), True, "keyboard"),
+        )
+    )
+
+
+def make_ambiguous_roles() -> InterfaceRoleResolution:
+    return resolve_roles(
+        (
+            InterfaceRoleEvidence(HidInterface(0, 3, 1, 1), True, "keyboard"),
+            InterfaceRoleEvidence(HidInterface(1, 3, 1, 1), True, "keyboard"),
+        )
+    )
+
+
+def make_swapped_roles() -> InterfaceRoleResolution:
+    return resolve_roles(
+        (
+            InterfaceRoleEvidence(HidInterface(0, 3, 1, 1), True, "keyboard"),
+            InterfaceRoleEvidence(HidInterface(1, 3, 0, 0), False, None),
+        )
+    )
+
+
+def make_g1_manifest(ambiguous: bool = False) -> StageManifest:
+    return make_manifest(
+        Stage.G1_PROFILE,
+        role_resolution=make_ambiguous_roles() if ambiguous else make_resolved_roles(),
+    )
+
+
+def make_incomplete_g1_manifest() -> StageManifest:
+    return make_manifest(Stage.G1_PROFILE, role_resolution=None)
+
+
 def command_spec(command: AdapterCommand) -> CommandSpec:
     return CommandSpec.from_command(command)
 
@@ -45,6 +88,7 @@ def command_step(
 def make_manifest(
     stage: Stage,
     steps: tuple[CommandStep, ...] | None = None,
+    role_resolution: InterfaceRoleResolution | None = None,
 ) -> StageManifest:
     defaults = {
         Stage.G1_PROFILE: (command_step(AdapterCommand(Operation.APPROVE_PROFILE)),),
@@ -81,4 +125,5 @@ def make_manifest(
         expected_result=f"{stage.value}-validated",
         recovery_plan=f"{stage.value}-recovery",
         approval_reference=f"test:{stage.value}",
+        role_resolution=role_resolution,
     )

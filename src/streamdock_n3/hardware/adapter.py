@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from streamdock_n3.hardware.backend import Backend
 from streamdock_n3.hardware.contracts import (
     AdapterCommand,
@@ -9,6 +11,7 @@ from streamdock_n3.hardware.contracts import (
     CapabilitySnapshot,
     DeviceProfile,
     ErrorCode,
+    HidInterface,
     OperationResult,
     ResultStatus,
     StageManifest,
@@ -24,6 +27,37 @@ from streamdock_n3.hardware.evidence import (
 from streamdock_n3.hardware.gate import GateViolation, _CapabilityGate
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovedProfile:
+    """Redacted approved profile view bound by the G1 commit."""
+
+    profile_digest: str
+    bcd_device: int
+    input_interface: HidInterface
+    control_interface: HidInterface
+    role_resolution_digest: str
+    approval_reference: str
+    pinned_commit: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.profile_digest, str) or len(self.profile_digest) != 64:
+            raise ValueError("profile_digest must be a 64-hex digest")
+        if isinstance(self.bcd_device, bool) or not isinstance(self.bcd_device, int):
+            raise ValueError("bcd_device must be an int")
+        if not isinstance(self.input_interface, HidInterface):
+            raise TypeError("input_interface must be a HidInterface")
+        if not isinstance(self.control_interface, HidInterface):
+            raise TypeError("control_interface must be a HidInterface")
+        if not isinstance(self.role_resolution_digest, str) or len(
+            self.role_resolution_digest
+        ) != 64:
+            raise ValueError("role_resolution_digest must be a 64-hex digest")
+        if not isinstance(self.approval_reference, str) or not self.approval_reference:
+            raise ValueError("approval_reference must be a non-empty string")
+        if not isinstance(self.pinned_commit, str) or not self.pinned_commit:
+            raise ValueError("pinned_commit must be a non-empty string")
+
+
 class N3Adapter:
     """Coordinate one backend attempt, evidence transaction, and gate settlement."""
 
@@ -34,6 +68,7 @@ class N3Adapter:
         "_gate",
         "_evidence",
         "_external_evidence",
+        "_approved_profile",
         "_busy",
     )
 
@@ -52,6 +87,7 @@ class N3Adapter:
         self._gate = _CapabilityGate()
         self._evidence = EvidenceRecorder()
         self._external_evidence = external_evidence
+        self._approved_profile: ApprovedProfile | None = None
         self._busy = False
 
     @property
@@ -73,6 +109,10 @@ class N3Adapter:
     @property
     def evidence_records(self) -> tuple[EvidenceRecord, ...]:
         return self._evidence.records
+
+    @property
+    def approved_profile(self) -> ApprovedProfile | None:
+        return self._approved_profile
 
     def begin_stage(self, manifest: StageManifest) -> None:
         self._enter()
@@ -102,13 +142,14 @@ class N3Adapter:
     ) -> AdapterState:
         self._enter()
         try:
+            manifest = self._gate.active_manifest
             preview = self._gate.preview_completion(
                 manual_confirmation,
                 recovery_confirmation,
             )
             record = stage_evidence(
                 self._profile,
-                self._gate.active_manifest,
+                manifest,
                 preview.next_state,
                 preview.recovery_status,
                 preview.epoch,
@@ -129,6 +170,23 @@ class N3Adapter:
                 raise GateViolation(ErrorCode.EVIDENCE_FAILURE) from None
             else:
                 self._evidence.commit(token)
+            if state is AdapterState.PROFILE_APPROVED:
+                resolution = manifest.role_resolution
+                if resolution is None:
+                    raise GateViolation(ErrorCode.PROFILE_EVIDENCE_INCOMPLETE)
+                input_interface = resolution.input_interface
+                control_interface = resolution.control_interface
+                if input_interface is None or control_interface is None:
+                    raise GateViolation(ErrorCode.INTERFACE_AMBIGUITY)
+                self._approved_profile = ApprovedProfile(
+                    profile_digest=manifest.profile_digest,
+                    bcd_device=self._profile.bcd_device,
+                    input_interface=input_interface,
+                    control_interface=control_interface,
+                    role_resolution_digest=resolution.digest(),
+                    approval_reference=manifest.approval_reference,
+                    pinned_commit=manifest.commit,
+                )
             return state
         finally:
             self._leave()
