@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
@@ -15,8 +16,11 @@ from streamdock_n3.hardware.contracts import (
     HidInterfaceRole,
     InputAction,
     InputKind,
+    InputSessionSpec,
     InterfaceRole,
     InterfaceRoleResolution,
+    KeyMap,
+    KeyMapEntry,
     NormalizedInputEvent,
     Operation,
     OperationResult,
@@ -421,3 +425,45 @@ def test_manifest_accepts_permission_plan_field() -> None:
 
     assert manifest.permission_plan is plan
     assert manifest.digest() != make_manifest(Stage.G2_PERMISSION).digest()
+
+
+def _session_spec() -> InputSessionSpec:
+    return InputSessionSpec(
+        duration_ms=600_000,
+        expected_press_count=10,
+        expected_rotation_count=20,
+        latency_p95_target_ms=250,
+        disconnect_grace_ms=2_000,
+        key_map=KeyMap((KeyMapEntry(1, 30, 1, InputKind.BUTTON, InputAction.PRESS),)),
+    )
+
+
+def test_session_spec_validation_fails_closed() -> None:
+    with pytest.raises(ValueError):
+        replace(_session_spec(), duration_ms=0)
+    with pytest.raises(ValueError):
+        replace(_session_spec(), duration_ms=600_001)
+    with pytest.raises(ValueError):
+        replace(_session_spec(), expected_press_count=0)
+    with pytest.raises(ValueError):
+        replace(_session_spec(), disconnect_grace_ms=2_001)
+    with pytest.raises(ValueError):
+        replace(_session_spec(), duration_ms=600_001)
+
+
+def test_session_spec_digest_is_stable_and_redacted() -> None:
+    spec = _session_spec()
+
+    assert len(spec.digest()) == 64
+    assert spec.digest() == _session_spec().digest()
+    rendered = json.dumps(spec.to_dict(), sort_keys=True)
+    for forbidden in ("/dev/", "/home", "serial"):
+        assert forbidden not in rendered
+
+
+def test_manifest_accepts_session_spec_field() -> None:
+    spec = _session_spec()
+    manifest = replace(make_manifest(Stage.G3_INPUT), session_spec=spec)
+
+    assert manifest.session_spec is spec
+    assert manifest.digest() != make_manifest(Stage.G3_INPUT).digest()

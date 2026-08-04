@@ -23,6 +23,7 @@ G0_MODULES = (
     Path("src/streamdock_n3/hardware/contracts.py"),
     Path("src/streamdock_n3/hardware/interface_roles.py"),
     Path("src/streamdock_n3/hardware/permissions.py"),
+    Path("src/streamdock_n3/hardware/input_session.py"),
     Path("src/streamdock_n3/hardware/gate.py"),
     Path("src/streamdock_n3/hardware/backend.py"),
     Path("src/streamdock_n3/hardware/adapter.py"),
@@ -48,7 +49,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "c3fab080a4938136721c99ddf08b72b181b76ce9dbc6ef7c8148ad3a54a01b98"
+        "d594fbfb5590c2525e29cb69ea4908862ce34f0ecc411c918fe739595abd8095"
+    ),
+    Path("src/streamdock_n3/hardware/input_session.py"): (
+        "45ba94beb50c2e1fdbccf979f35f60ea8bd89a208caf946e5d80901047dc31f7"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
@@ -141,6 +145,7 @@ ALLOWED_STDLIB_IMPORTS = {
     "__future__",
     "base64",
     "binascii",
+    "contextlib",
     "collections.abc",
     "dataclasses",
     "enum",
@@ -150,7 +155,10 @@ ALLOWED_STDLIB_IMPORTS = {
     "os",
     "pathlib",
     "re",
+    "select",
+    "struct",
     "subprocess",
+    "time",
     "sys",
     "types",
     "typing",
@@ -216,6 +224,7 @@ IMPORT_TIME_ALLOWED_CALLS = {
     "os.geteuid",
     "pathlib.Path",
     "re.compile",
+    "struct.Struct",
     "types.MappingProxyType",
 }
 
@@ -240,6 +249,10 @@ def _forbidden_source_violations(path: Path, source: str) -> list[str]:
         # "setfacl" appears only as rendered ACL template data inside
         # PermissionArtifact values; permissions.py never invokes it.
         violations = [forbidden for forbidden in violations if forbidden != "setfacl"]
+    if path == Path("src/streamdock_n3/hardware/input_session.py"):
+        # "os.open" appears only as the single O_RDONLY open inside
+        # EvdevReadOnlyBackend.open_read_only; the module never writes.
+        violations = [forbidden for forbidden in violations if forbidden != "os.open"]
     return violations
 
 
@@ -475,14 +488,31 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 path == Path("src/streamdock_n3/hardware/permissions.py")
                 and _enclosing_class(tree, node) == "InstallTransaction"
             )
-            if not scoped_install:
+            # input_session.py may call os.open only for the single O_RDONLY
+            # device open inside EvdevReadOnlyBackend.open_read_only.
+            scoped_read_open = (
+                path == Path("src/streamdock_n3/hardware/input_session.py")
+                and function.attr == "open"
+                and _enclosing_class(tree, node) == "EvdevReadOnlyBackend"
+            )
+            if not scoped_install and not scoped_read_open:
                 violations.append(f"{path}:{call.lineno}: conservative file method {function.attr}")
         else:
             file_functions = canonical_names & {"builtins.open", "os.open"}
             if file_functions:
-                violations.append(
-                    f"{path}:{call.lineno}: file function {sorted(file_functions)[0]}"
+                # input_session.py may call os.open only for the single
+                # O_RDONLY device open inside EvdevReadOnlyBackend.
+                scoped_read_open = (
+                    path == Path("src/streamdock_n3/hardware/input_session.py")
+                    and file_functions == {"os.open"}
+                    and _enclosing_class(tree, node) == "EvdevReadOnlyBackend"
+                    and _enclosing_function(tree, node) is not None
+                    and _enclosing_function(tree, node).name == "open_read_only"  # type: ignore[union-attr]
                 )
+                if not scoped_read_open:
+                    violations.append(
+                        f"{path}:{call.lineno}: file function {sorted(file_functions)[0]}"
+                    )
         if (
             isinstance(function, ast.Attribute)
             and function.attr in MUTATING_METHODS
@@ -1386,6 +1416,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     evidence = modules["streamdock_n3.hardware.evidence"]
     interface_roles = modules["streamdock_n3.hardware.interface_roles"]
     permissions = modules["streamdock_n3.hardware.permissions"]
+    input_session = modules["streamdock_n3.hardware.input_session"]
 
     stage = contracts.Stage(contracts.Stage.G1_PROFILE.value)
     state = contracts.AdapterState(contracts.AdapterState.CANDIDATE.value)
@@ -1436,6 +1467,19 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         "test:g2",
     )
     install_transaction = permissions.InstallTransaction(Path("/tmp/n3-ai-deck-inert"))
+    input_handle = input_session.InputFileHandle(-1, opened_read_only=True)
+    evdev_backend = input_session.EvdevReadOnlyBackend()
+    key_map_entry = contracts.KeyMapEntry(1, 30, 1, input_kind, input_action)
+    key_map = contracts.KeyMap((key_map_entry,))
+    raw_event = contracts.RawInputEvent(1, 30, 1, 0)
+    session_spec = contracts.InputSessionSpec(
+        5_000, 10, 20, 250, 2_000, key_map
+    )
+    control_count = contracts.ControlCount(1, 10, 10, 0, 0)
+    control_mapping = contracts.ControlMapping(1, input_kind, 1, 30)
+    session_result = contracts.InputSessionResult(
+        (control_count,), 100, 0, False, (control_mapping,)
+    )
     profile = contracts.DeviceProfile(
         0x6602,
         0x1000,
@@ -1551,6 +1595,15 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             permission_artifact,
             permission_plan,
             install_transaction,
+            input_handle,
+            evdev_backend,
+            key_map_entry,
+            key_map,
+            raw_event,
+            session_spec,
+            control_count,
+            control_mapping,
+            session_result,
         )
     }
     declared = {
@@ -1560,7 +1613,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         for node in tree.body
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
     }
-    assert declared - {"Backend", "EvidenceSink"} == constructed
+    assert declared - {"Backend", "EvidenceSink", "ReadOnlyInputBackend"} == constructed
     assert calls == []
 
     helper_result = ipc.run_fake_helper(request, timeout_ms=1_000)
@@ -2134,6 +2187,7 @@ def test_complete_g0_source_closure_keeps_the_exact_brief_modules_and_dependenci
         Path("src/streamdock_n3/hardware/contracts.py"),
         Path("src/streamdock_n3/hardware/interface_roles.py"),
         Path("src/streamdock_n3/hardware/permissions.py"),
+        Path("src/streamdock_n3/hardware/input_session.py"),
         Path("src/streamdock_n3/hardware/gate.py"),
         Path("src/streamdock_n3/hardware/backend.py"),
         Path("src/streamdock_n3/hardware/adapter.py"),
@@ -2197,7 +2251,7 @@ def test_dependency_static_gates_reject_import_time_unsafe_regressions(
     )
 
 
-def test_reviewed_snapshot_has_the_exact_unique_fifteen_path_closure() -> None:
+def test_reviewed_snapshot_has_the_exact_unique_sixteen_path_closure() -> None:
     expected_dependencies = (
         Path("src/streamdock_n3/__init__.py"),
         Path("src/streamdock_n3/device_catalog.py"),
@@ -2211,7 +2265,7 @@ def test_reviewed_snapshot_has_the_exact_unique_fifteen_path_closure() -> None:
     )
 
     assert expected == REVIEWED_SOURCE_PATHS
-    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 15
+    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 16
     assert set(REVIEWED_SOURCE_SHA256) == set(REVIEWED_SOURCE_PATHS)
 
 

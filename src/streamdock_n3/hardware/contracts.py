@@ -106,6 +106,7 @@ class ErrorCode(StrEnum):
     INTERFACE_AMBIGUITY = "interface_ambiguity"
     PROFILE_EVIDENCE_INCOMPLETE = "profile_evidence_incomplete"
     PERMISSION_PLAN_INVALID = "permission_plan_invalid"
+    INPUT_SESSION_INVALID = "input_session_invalid"
 
 
 class RecoveryStatus(StrEnum):
@@ -502,6 +503,7 @@ class StageManifest:
     schema_version: int = SCHEMA_VERSION
     role_resolution: InterfaceRoleResolution | None = None
     permission_plan: PermissionPlan | None = None
+    session_spec: InputSessionSpec | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.stage, Stage):
@@ -529,6 +531,10 @@ class StageManifest:
             self.permission_plan, PermissionPlan
         ):
             raise TypeError("permission_plan must be a PermissionPlan or None")
+        if self.session_spec is not None and not isinstance(
+            self.session_spec, InputSessionSpec
+        ):
+            raise TypeError("session_spec must be an InputSessionSpec or None")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -547,6 +553,9 @@ class StageManifest:
             ),
             "permission_plan": (
                 self.permission_plan.to_dict() if self.permission_plan is not None else None
+            ),
+            "session_spec": (
+                self.session_spec.to_dict() if self.session_spec is not None else None
             ),
         }
 
@@ -632,6 +641,240 @@ class NormalizedInputEvent:
             allowed_actions = (InputAction.LEFT, InputAction.RIGHT)
         if self.action not in allowed_actions:
             raise ValueError("action is not valid for input kind")
+
+
+@dataclass(frozen=True, slots=True)
+class RawInputEvent:
+    type: int
+    code: int
+    value: int
+    monotonic_ns: int
+
+    def __post_init__(self) -> None:
+        for value, field in ((self.type, "type"), (self.code, "code")):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+        if isinstance(self.value, bool) or not isinstance(self.value, int):
+            raise ValueError("value must be an integer")
+        _validate_int(self.monotonic_ns, "monotonic_ns", 0, 2**63 - 1)
+
+
+@dataclass(frozen=True, slots=True)
+class KeyMapEntry:
+    event_type: int
+    event_code: int
+    control_id: int
+    kind: InputKind
+    press_action: InputAction
+
+    def __post_init__(self) -> None:
+        for value, field in (
+            (self.event_type, "event_type"),
+            (self.event_code, "event_code"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+        if not isinstance(self.kind, InputKind):
+            raise TypeError("kind must be an InputKind")
+        if not isinstance(self.press_action, InputAction):
+            raise TypeError("press_action must be an InputAction")
+        _validate_int(self.control_id, "control_id", 1, 9)
+        if self.kind is InputKind.KNOB_ROTATE:
+            if self.press_action is not InputAction.LEFT:
+                raise ValueError("knob rotation press_action must be LEFT")
+        elif self.press_action is not InputAction.PRESS:
+            raise ValueError("discrete control press_action must be PRESS")
+
+    def action_for_value(self, value: int) -> InputAction:
+        if self.kind is InputKind.KNOB_ROTATE:
+            return InputAction.LEFT if value >= 0 else InputAction.RIGHT
+        return InputAction.PRESS if value else InputAction.RELEASE
+
+
+@dataclass(frozen=True, slots=True)
+class KeyMap:
+    entries: tuple[KeyMapEntry, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entries, tuple):
+            raise TypeError("entries must be a tuple of KeyMapEntry values")
+        if not all(isinstance(entry, KeyMapEntry) for entry in self.entries):
+            raise TypeError("entries must contain KeyMapEntry values")
+        pairs = [(entry.event_type, entry.event_code) for entry in self.entries]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("entries must have unique event type/code pairs")
+
+    def lookup(self, raw: RawInputEvent) -> tuple[KeyMapEntry, InputAction] | None:
+        if not isinstance(raw, RawInputEvent):
+            raise TypeError("raw must be a RawInputEvent")
+        for entry in self.entries:
+            if entry.event_type == raw.type and entry.event_code == raw.code:
+                return entry, entry.action_for_value(raw.value)
+        return None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "entries": [
+                {
+                    "event_type": entry.event_type,
+                    "event_code": entry.event_code,
+                    "control_id": entry.control_id,
+                    "kind": entry.kind.value,
+                    "press_action": entry.press_action.value,
+                }
+                for entry in self.entries
+            ]
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InputSessionSpec:
+    duration_ms: int
+    expected_press_count: int
+    expected_rotation_count: int
+    latency_p95_target_ms: int
+    disconnect_grace_ms: int
+    key_map: KeyMap
+
+    def __post_init__(self) -> None:
+        _validate_int(self.duration_ms, "duration_ms", 1, MAX_DEADLINE_MS)
+        _validate_int(self.expected_press_count, "expected_press_count", 1, 2**31 - 1)
+        _validate_int(self.expected_rotation_count, "expected_rotation_count", 1, 2**31 - 1)
+        _validate_int(self.latency_p95_target_ms, "latency_p95_target_ms", 1, MAX_DEADLINE_MS)
+        _validate_int(self.disconnect_grace_ms, "disconnect_grace_ms", 1, 2_000)
+        if not isinstance(self.key_map, KeyMap):
+            raise TypeError("key_map must be a KeyMap")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "duration_ms": self.duration_ms,
+            "expected_press_count": self.expected_press_count,
+            "expected_rotation_count": self.expected_rotation_count,
+            "latency_p95_target_ms": self.latency_p95_target_ms,
+            "disconnect_grace_ms": self.disconnect_grace_ms,
+            "key_map": self.key_map.to_dict(),
+        }
+
+    def digest(self) -> str:
+        return _canonical_digest(self.to_dict())
+
+
+@dataclass(frozen=True, slots=True)
+class ControlCount:
+    control_id: int
+    press_count: int
+    release_count: int
+    left_count: int
+    right_count: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.control_id, "control_id", 1, 9)
+        for value, field in (
+            (self.press_count, "press_count"),
+            (self.release_count, "release_count"),
+            (self.left_count, "left_count"),
+            (self.right_count, "right_count"),
+        ):
+            _validate_int(value, field, 0, 2**63 - 1)
+
+
+@dataclass(frozen=True, slots=True)
+class ControlMapping:
+    control_id: int
+    kind: InputKind
+    event_type: int
+    event_code: int
+
+    def __post_init__(self) -> None:
+        _validate_int(self.control_id, "control_id", 1, 9)
+        if not isinstance(self.kind, InputKind):
+            raise TypeError("kind must be an InputKind")
+        for value, field in ((self.event_type, "event_type"), (self.event_code, "event_code")):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class InputSessionResult:
+    counts: tuple[ControlCount, ...]
+    latency_p95_ms: int
+    unknown_count: int
+    disconnected: bool
+    mapping: tuple[ControlMapping, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.counts, tuple) or not self.counts:
+            raise ValueError("counts must be a non-empty tuple of ControlCount values")
+        if not all(isinstance(count, ControlCount) for count in self.counts):
+            raise TypeError("counts must contain ControlCount values")
+        ids = [count.control_id for count in self.counts]
+        if len(set(ids)) != len(ids):
+            raise ValueError("counts must have unique control ids")
+        _validate_int(self.latency_p95_ms, "latency_p95_ms", 0, 2**63 - 1)
+        _validate_int(self.unknown_count, "unknown_count", 0, 2**63 - 1)
+        if not isinstance(self.disconnected, bool):
+            raise TypeError("disconnected must be a bool")
+        if not isinstance(self.mapping, tuple):
+            raise TypeError("mapping must be a tuple of ControlMapping values")
+        if not all(isinstance(item, ControlMapping) for item in self.mapping):
+            raise TypeError("mapping must contain ControlMapping values")
+
+    def meets_requirements(self, spec: InputSessionSpec) -> bool:
+        if not isinstance(spec, InputSessionSpec):
+            raise TypeError("spec must be an InputSessionSpec")
+        if self.disconnected:
+            return False
+        if self.latency_p95_ms > spec.latency_p95_target_ms:
+            return False
+        observed: dict[int, ControlCount] = {
+            count.control_id: count for count in self.counts
+        }
+        for entry in spec.key_map.entries:
+            count = observed.get(entry.control_id)
+            if count is None:
+                return False
+            if entry.kind is InputKind.KNOB_ROTATE:
+                if (
+                    count.left_count < spec.expected_rotation_count
+                    or count.right_count < spec.expected_rotation_count
+                ):
+                    return False
+            else:
+                if (
+                    count.press_count < spec.expected_press_count
+                    or count.release_count < spec.expected_press_count
+                ):
+                    return False
+        return True
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "counts": [
+                {
+                    "control_id": count.control_id,
+                    "press_count": count.press_count,
+                    "release_count": count.release_count,
+                    "left_count": count.left_count,
+                    "right_count": count.right_count,
+                }
+                for count in self.counts
+            ],
+            "latency_p95_ms": self.latency_p95_ms,
+            "unknown_count": self.unknown_count,
+            "disconnected": self.disconnected,
+            "mapping": [
+                {
+                    "control_id": item.control_id,
+                    "kind": item.kind.value,
+                    "event_type": item.event_type,
+                    "event_code": item.event_code,
+                }
+                for item in self.mapping
+            ],
+        }
+
+    def digest(self) -> str:
+        return _canonical_digest(self.to_dict())
 
 
 @dataclass(frozen=True, slots=True)
