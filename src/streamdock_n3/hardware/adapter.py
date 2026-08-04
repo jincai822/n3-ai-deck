@@ -328,12 +328,13 @@ class N3Adapter:
             command=command,
             device_node=node,
         )
+        timeout_ms = min(manifest.deadline_ms, spec.duration_ms + 2_000)
         if self._session_runner is not None:
             handled: OperationResult | IpcSessionResponse = self._session_runner.run(
-                request, spec.duration_ms
+                request, timeout_ms
             )
         else:
-            handled = run_fake_helper(request, spec.duration_ms)
+            handled = run_fake_helper(request, timeout_ms)
         if not isinstance(handled, IpcSessionResponse):
             return OperationResult(ResultStatus.BACKEND_ERROR, ErrorCode.INVALID_RESPONSE, 0)
         response = handled

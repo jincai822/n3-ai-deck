@@ -246,7 +246,7 @@ def _build_manifest(spec: InputSessionSpec) -> StageManifest:
         steps=(
             CommandStep(CommandSpec.from_command(AdapterCommand(Operation.OBSERVE_INPUTS))),
         ),
-        deadline_ms=spec.duration_ms,
+        deadline_ms=spec.duration_ms + 2_000,
         expected_result="g3_input-validated",
         recovery_plan="g3_input-recovery",
         approval_reference="owner:2026-08-04:g1-profile-approval",
