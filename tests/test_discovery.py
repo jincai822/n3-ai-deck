@@ -118,6 +118,20 @@ def test_boot_keyboard_resolves_without_readable_capabilities(tmp_path: Path) ->
     assert observation.hid_interfaces[1].role == "input"
 
 
+def test_multiple_input_associations_any_keyboard_wins(tmp_path: Path) -> None:
+    add_usb_device(tmp_path, "1-5", "6602", "1000", "0300")
+    add_interface(tmp_path, "1-5", "1.0", "00", "03", "00", "00")
+    input_interface = add_interface(tmp_path, "1-5", "1.1", "01", "03", "01", "01")
+    add_input_association(input_interface, name="input3", ev="0 0 0 0", key="0 0 0 0")
+    add_input_association(input_interface, name="input9")
+
+    observation = discover_usb_devices(tmp_path).devices[0]
+
+    assert observation.hid_interfaces[1].input_associated is True
+    assert observation.hid_interfaces[1].input_kind == "keyboard"
+    assert observation.interface_selection == "resolved"
+
+
 def test_single_hid_interface_cannot_resolve_roles(tmp_path: Path) -> None:
     add_usb_device(tmp_path, "2-2", "6602", "1000", "0300")
     add_interface(tmp_path, "2-2", "1.0", "00", "03", "00", "00")

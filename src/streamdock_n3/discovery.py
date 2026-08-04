@@ -316,9 +316,16 @@ def _scan_input_association(
         return False, None
     if not associations:
         return False, None
-    ev = _read_input_attribute(resolved_interface, associations[0], "ev", warnings)
-    key = _read_input_attribute(resolved_interface, associations[0], "key", warnings)
-    return True, _input_kind_from_bitmaps(ev, key)
+    kinds: list[str | None] = []
+    for association in associations:
+        ev = _read_input_attribute(resolved_interface, association, "ev", warnings)
+        key = _read_input_attribute(resolved_interface, association, "key", warnings)
+        kinds.append(_input_kind_from_bitmaps(ev, key))
+    if any(kind == "keyboard" for kind in kinds):
+        return True, "keyboard"
+    if any(kind == "other" for kind in kinds):
+        return True, "other"
+    return True, None
 
 
 def _interface_selection(

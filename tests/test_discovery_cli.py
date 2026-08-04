@@ -78,6 +78,35 @@ def test_human_output_is_explicitly_candidate_only(
     assert "supported" not in output.lower()
 
 
+def test_json_output_reports_resolved_interface_roles(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    add_target(tmp_path, with_hid=True)
+    boot = tmp_path / "1-2:1.1"
+    for name, value in (
+        ("bInterfaceNumber", "01"),
+        ("bInterfaceClass", "03"),
+        ("bInterfaceSubClass", "01"),
+        ("bInterfaceProtocol", "01"),
+    ):
+        write_attr(boot, name, value)
+    capabilities = boot / "input" / "input5" / "capabilities"
+    capabilities.mkdir(parents=True)
+    (capabilities / "ev").write_text("180000000000003f 0 0 0\n", encoding="ascii")
+    (capabilities / "key").write_text("1 0 0 0\n", encoding="ascii")
+
+    assert discovery.main(["--sysfs-root", str(tmp_path), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    device = payload["devices"][0]
+    assert device["interface_selection"] == "resolved"
+    roles = {item["number"]: item for item in device["hid_interfaces"]}
+    assert roles["00"]["role"] == "control"
+    assert roles["01"]["role"] == "input"
+    assert "no_input_association" in roles["00"]["role_basis"]
+    assert "boot_keyboard" in roles["01"]["role_basis"]
+
+
 def test_upstream_reference_human_protocol_status_matches_json(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

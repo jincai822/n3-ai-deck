@@ -336,4 +336,3 @@ def test_manifest_accepts_role_resolution_field() -> None:
 
     assert manifest.role_resolution is resolved
     assert manifest.digest() != make_manifest(Stage.G1_PROFILE).digest()
-

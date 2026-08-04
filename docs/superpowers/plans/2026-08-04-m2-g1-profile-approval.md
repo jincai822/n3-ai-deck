@@ -59,6 +59,7 @@ class InterfaceRole(StrEnum):
 
 class RoleBasis(StrEnum):
     BOOT_KEYBOARD = "boot_keyboard"          # HID class 03 / subclass 01 / protocol 01
+    HID_INTERFACE = "hid_interface"          # fallback basis for UNKNOWN roles (added during Task 1 review)
     INPUT_SUBSYSTEM = "input_subsystem"      # interface owns an input device with EV_KEY
     VENDOR_HID = "vendor_hid"                # HID class 03 / subclass 00 / protocol 00
     NO_INPUT_ASSOCIATION = "no_input_association"
@@ -111,7 +112,11 @@ Classification rules (exact, documented, no guessing):
    `input_associated is False` → `CONTROL` (basis `VENDOR_HID` +
    `NO_INPUT_ASSOCIATION`). This is an owner-approved inference: the interface
    has no registered input device and is the only remaining HID interface.
-4. Everything else → `UNKNOWN`.
+4. Everything else → `UNKNOWN` (basis `HID_INTERFACE`).
+
+An `INPUT` role accumulates every applicable basis: a boot keyboard that also
+owns a keyboard input association carries both `BOOT_KEYBOARD` and
+`INPUT_SUBSYSTEM`.
 
 Resolution: exactly one `INPUT` and exactly one `CONTROL` and zero `UNKNOWN` →
 `RESOLVED`; otherwise `AMBIGUOUS`. `AMBIGUOUS` blocks G1 with
