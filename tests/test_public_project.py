@@ -170,7 +170,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "docs/validation/2026-08-04-g1-profile-approval.md",
         "owner:2026-08-04:g1-profile-approval",
         "candidate roles pending G3 physical validation",
-        "- [ ] G2:",
+        "- [x] G2:",
         "- [ ] G3–G7:",
     ):
         assert required in roadmap
@@ -228,7 +228,10 @@ def test_public_docs_describe_g2_offline_permission_boundary() -> None:
     assert "rejected by tests" in architecture
     assert "no permission was granted" in architecture.lower()
     assert "docs/superpowers/plans/2026-08-04-m2-g2-minimal-permissions.md" in roadmap
-    assert "- [ ] G2:" in roadmap
+    assert "- [x] G2: approve any permission change" in roadmap
+    assert "docs/validation/2026-08-04-g2-permission-approval.md" in roadmap
+    assert "owner:2026-08-04:g2" in roadmap
+    assert "grants nothing" in roadmap
 
     for text in (english, architecture, roadmap):
         for line in text.splitlines():

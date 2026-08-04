@@ -49,11 +49,12 @@ snapshots are validation context, not state authority.
   approval reference `owner:2026-08-04:g1-profile-approval`. Interface `01` is the
   approved candidate input interface and interface `00` the approved candidate control
   interface; these remain candidate roles pending G3 physical validation.
-- [ ] G2: approve any permission change separately. The offline permission
-  generators, install transaction, and redacted approval evidence are implemented
-  (see the [G2 plan](docs/superpowers/plans/2026-08-04-m2-g2-minimal-permissions.md));
-  the owner-gated permission approval and any real ACL/udev installation remain
-  pending. No permission was granted and no system state was changed.
+- [x] G2: approve any permission change separately. Evidence:
+  [the G2 permission approval record](docs/validation/2026-08-04-g2-permission-approval.md),
+  approval reference `owner:2026-08-04:g2`. The approval grants nothing: the
+  artifacts are offline templates, no permission was granted, and no system
+  state was changed; any real ACL/udev installation remains a separate
+  owner-gated manual action before G3.
 - [ ] G3–G7: validate input, initialization, brightness, one LCD, and all six LCDs through
   their independent manual gates.
 
