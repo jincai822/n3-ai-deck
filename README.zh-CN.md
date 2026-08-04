@@ -44,6 +44,8 @@ uv run n3-ai-deck-detect --json
 
 G1 在被动发现之上解决接口职责：同一 sysfs-only 命令现在为每个 HID 接口报告角色（`input` / `control` / `unknown`）及其脱敏证据依据，并给出 `interface_selection`（`resolved` / `ambiguous` / `none`）。已解析的候选 profile 及其角色通过 `N3Adapter` 的 G1 门显式批准；批准是候选 profile 决定，不是兼容性声明。角色在 G3 真机物理验证前仍是已批准的候选角色，`6602:1000` 仍是协议未验证的候选。
 
+G2 完全离线设计权限且不授予任何权限：仅生成临时单节点 ACL 计划（仅占位符）和精确匹配 `6602:1000` 的 `TAG+="uaccess"` udev 规则模板，以及只针对显式非系统 root 的安装事务。未授予任何权限、未写任何系统文件、未执行任何权限命令；任何真实的 ACL 或 udev 安装仍是独立的人工操作。
+
 ## 规划中的执行链路
 
 ```text

@@ -34,6 +34,10 @@ G1 chooses and approves an exact active profile and interface responsibility; G2
 
 G1 approves an exact candidate active profile and resolves interface responsibility from passive sysfs evidence only; it never opens `/dev` or loads the SDK. A pure role classifier maps boot-keyboard and input-subsystem interfaces to `INPUT`, and vendor-HID interfaces without an input association to `CONTROL`; any ambiguity, incomplete evidence, or later identity/interface/role drift fails closed at the gate. The approved profile and roles are pinned at G1 commit and every later stage must match exactly. Approved roles are approved candidate roles pending G3 physical validation: `6602:1000` remains a candidate with unvalidated protocol, and no compatibility claim is made.
 
+## G2 implemented offline permission boundary
+
+G2 designs permissions offline and grants nothing. Pure generators render a temporary single-node ACL plan (default first strategy, placeholders only, never executed) and precise persistent udev rule templates matching exactly `6602:1000` plus the validated subsystem/interface with `TAG+="uaccess"`; `MODE="0666"`, vendor-only matches, and unproven combined grants are rejected by tests. An offline install transaction applies artifacts only to an explicit target root that can never be `/etc` or `/usr`, verifying target state before commit and rolling back byte-for-byte. The G2 gate requires a permission plan covering exactly the input and hidraw subsystems justified by the pinned G1 roles and records redacted approval evidence. No permission was granted, no system file was written, and no permission command was executed; any real ACL or udev installation remains a separate owner-gated manual action before G3.
+
 ## Public components
 
 ### Device adapter

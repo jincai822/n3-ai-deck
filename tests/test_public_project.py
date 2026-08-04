@@ -209,6 +209,34 @@ def test_public_docs_describe_g1_candidate_profile_approval() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
+def test_public_docs_describe_g2_offline_permission_boundary() -> None:
+    english = read_text("README.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "offline",
+        "temporary",
+        "ACL",
+        "uaccess",
+        "no permission",
+    ):
+        assert required.lower() in "\n".join((english, architecture)).lower()
+
+    assert "single-node ACL" in architecture
+    assert 'MODE="0666"' in architecture
+    assert "rejected by tests" in architecture
+    assert "no permission was granted" in architecture.lower()
+    assert "docs/superpowers/plans/2026-08-04-m2-g2-minimal-permissions.md" in roadmap
+    assert "- [ ] G2:" in roadmap
+
+    for text in (english, architecture, roadmap):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english

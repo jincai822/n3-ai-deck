@@ -44,6 +44,8 @@ The inherited daemon, probe, debug, GUI, and install commands are outside M1's r
 
 G1 extends this passive discovery to resolve interface responsibility: the same sysfs-only command now reports a role (`input` / `control` / `unknown`) and its redacted evidence basis for each HID interface, and an `interface_selection` of `resolved` / `ambiguous` / `none`. A resolved candidate profile and its roles are approved explicitly through the `N3Adapter` G1 gate; approval is a candidate-profile decision, not a compatibility claim. Roles remain approved candidate roles pending G3 physical validation, and `6602:1000` remains a candidate with unvalidated protocol.
 
+G2 designs permissions entirely offline and grants nothing: a temporary single-node ACL plan (placeholders only) and precise `6602:1000`-exact `TAG+="uaccess"` udev rule templates, plus an install transaction that only ever targets an explicit non-system root. No permission was granted, no system file was written, and no permission command was executed; any real ACL or udev installation stays a separate manual action.
+
 ## Planned flow
 
 ```text
