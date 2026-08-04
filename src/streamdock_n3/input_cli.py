@@ -363,6 +363,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="bounded session window (default: 600000)",
     )
     parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="report distinct observed event codes for key-map calibration",
+    )
+    parser.add_argument(
         "--key-map",
         type=Path,
         default=None,
@@ -377,10 +382,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     duration_ms = cast(int, args.duration_ms)
     key_map = _load_key_map(cast(Path | None, args.key_map))
     use_json = cast(bool, args.json)
+    calibrate = cast(bool, args.calibrate)
 
     try:
         node = resolve_input_node()
-        rendered = run_session_flow(node, key_map, duration_ms)
+        if calibrate:
+            spec = InputSessionSpec(
+                duration_ms=duration_ms,
+                expected_press_count=10,
+                expected_rotation_count=20,
+                latency_p95_target_ms=250,
+                disconnect_grace_ms=2_000,
+                key_map=KeyMap(()),
+                calibration=True,
+            )
+            manifest = _build_manifest(spec)
+            profile = _build_profile()
+            adapter = N3Adapter(
+                profile,
+                COMMIT,
+                FakeBackend(),
+                input_node=node,
+            )
+            _advance_approvals(adapter, manifest)
+            adapter.begin_stage(manifest)
+            rendered = _render_result(adapter, node)
+        else:
+            rendered = run_session_flow(node, key_map, duration_ms)
     except (GateViolation, NodeResolutionError, ValueError) as error:
         print(
             json.dumps(

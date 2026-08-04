@@ -37,6 +37,7 @@ from streamdock_n3.hardware.contracts import (  # type: ignore[attr-defined]
     KeyMap,
     KeyMapEntry,
     NormalizedInputEvent,
+    ObservedCode,
     Operation,
     OperationResult,
     PermissionArtifact,
@@ -117,6 +118,7 @@ _SESSION_SPEC_KEYS = frozenset(
         "latency_p95_target_ms",
         "disconnect_grace_ms",
         "key_map",
+        "calibration",
     }
 )
 _SESSION_REQUEST_KEYS = frozenset(
@@ -134,8 +136,9 @@ _COUNT_KEYS = frozenset(
     {"control_id", "kind", "press_count", "release_count", "left_count", "right_count"}
 )
 _MAPPING_KEYS = frozenset({"control_id", "kind", "event_type", "event_code"})
+_OBSERVED_CODE_KEYS = frozenset({"event_type", "event_code"})
 _SESSION_RESULT_KEYS = frozenset(
-    {"counts", "latency_p95_ms", "unknown_count", "disconnected", "mapping"}
+    {"counts", "latency_p95_ms", "unknown_count", "disconnected", "mapping", "distinct_codes"}
 )
 _SESSION_RESPONSE_KEYS = frozenset(
     {
@@ -365,6 +368,7 @@ def _parse_session_spec(value: object) -> InputSessionSpec:
         latency_p95_target_ms=_require_int(wire["latency_p95_target_ms"]),
         disconnect_grace_ms=_require_int(wire["disconnect_grace_ms"]),
         key_map=_parse_key_map(wire["key_map"]),
+        calibration=_require_bool(wire["calibration"]),
     )
 
 
@@ -415,11 +419,24 @@ def _input_session_result_to_wire(result: InputSessionResult) -> dict[str, objec
     return result.to_dict()
 
 
+def _parse_observed_code(value: object) -> ObservedCode:
+    wire = _require_exact_keys(value, _OBSERVED_CODE_KEYS)
+    return ObservedCode(
+        event_type=_require_int(wire["event_type"]),
+        event_code=_require_int(wire["event_code"]),
+    )
+
+
 def _parse_input_session_result(value: object) -> InputSessionResult:
     wire = _require_exact_keys(value, _SESSION_RESULT_KEYS)
     counts_value = wire["counts"]
     mapping_value = wire["mapping"]
-    if not isinstance(counts_value, list) or not isinstance(mapping_value, list):
+    distinct_value = wire["distinct_codes"]
+    if (
+        not isinstance(counts_value, list)
+        or not isinstance(mapping_value, list)
+        or not isinstance(distinct_value, list)
+    ):
         raise ValueError
     return InputSessionResult(
         counts=tuple(_parse_control_count(item) for item in counts_value),
@@ -427,6 +444,7 @@ def _parse_input_session_result(value: object) -> InputSessionResult:
         unknown_count=_require_int(wire["unknown_count"]),
         disconnected=_require_bool(wire["disconnected"]),
         mapping=tuple(_parse_control_mapping(item) for item in mapping_value),
+        distinct_codes=tuple(_parse_observed_code(item) for item in distinct_value),
     )
 
 

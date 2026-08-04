@@ -15,6 +15,7 @@ from streamdock_n3.hardware.contracts import (
     InputSessionSpec,
     KeyMap,
     KeyMapEntry,
+    ObservedCode,
     RawInputEvent,
 )
 from streamdock_n3.hardware.input_session import (
@@ -265,3 +266,35 @@ def test_real_backend_treats_empty_read_as_disconnect(
 
     with pytest.raises(OSError):
         list(backend.read_events(handle, time.monotonic_ns() + 10**9))
+
+
+def test_session_reports_distinct_observed_codes() -> None:
+    events = [
+        press(30),
+        release(30),
+        RawInputEvent(1, 999, 1, time.monotonic_ns()),
+        RawInputEvent(1, 999, 0, time.monotonic_ns()),
+        RawInputEvent(3, 8, 1, time.monotonic_ns()),
+    ]
+    backend = FixtureInputBackend(events)
+
+    result = run_input_session(spec(), "/dev/input/event12", backend)
+
+    assert result.distinct_codes == (
+        ObservedCode(1, 30),
+        ObservedCode(1, 999),
+        ObservedCode(3, 8),
+    )
+    assert result.unknown_count == 2
+
+
+def test_calibration_session_with_empty_key_map_reports_codes() -> None:
+    calibration_spec = spec(calibration=True, key_map=KeyMap(()))
+    events = [RawInputEvent(1, 42, 1, time.monotonic_ns())]
+    backend = FixtureInputBackend(events)
+
+    result = run_input_session(calibration_spec, "/dev/input/event12", backend)
+
+    assert result.counts == ()
+    assert result.distinct_codes == (ObservedCode(1, 42),)
+    assert result.unknown_count == 1

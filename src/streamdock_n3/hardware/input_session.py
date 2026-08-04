@@ -22,6 +22,7 @@ from streamdock_n3.hardware.contracts import (
     InputSessionSpec,
     KeyMap,
     NormalizedInputEvent,
+    ObservedCode,
     RawInputEvent,
 )
 
@@ -164,6 +165,7 @@ def run_input_session(
     unknown_count = 0
     latency_samples: list[int] = []
     disconnected = False
+    observed_codes: set[tuple[int, int]] = set()
 
     try:
         for raw in backend.read_events(handle, deadline_ns):
@@ -171,6 +173,7 @@ def run_input_session(
                 raise InputSessionError(ErrorCode.INPUT_SESSION_INVALID)
             if raw.type in _META_EVENT_TYPES:
                 continue
+            observed_codes.add((raw.type, raw.code))
             normalized = normalize_event(raw, spec.key_map)
             if normalized is None:
                 unknown_count += 1
@@ -233,5 +236,11 @@ def run_input_session(
         mapping=tuple(
             mapping[key]
             for key in sorted(mapping, key=lambda item: (item[0], item[1].value))
+        ),
+        distinct_codes=tuple(
+            sorted(
+                (ObservedCode(event_type, code) for event_type, code in observed_codes),
+                key=lambda item: (item.event_type, item.event_code),
+            )
         ),
     )

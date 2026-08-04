@@ -736,6 +736,7 @@ class InputSessionSpec:
     latency_p95_target_ms: int
     disconnect_grace_ms: int
     key_map: KeyMap
+    calibration: bool = False
 
     def __post_init__(self) -> None:
         _validate_int(self.duration_ms, "duration_ms", 1, MAX_DEADLINE_MS)
@@ -745,6 +746,10 @@ class InputSessionSpec:
         _validate_int(self.disconnect_grace_ms, "disconnect_grace_ms", 1, 2_000)
         if not isinstance(self.key_map, KeyMap):
             raise TypeError("key_map must be a KeyMap")
+        if not isinstance(self.calibration, bool):
+            raise TypeError("calibration must be a bool")
+        if self.calibration and self.key_map.entries:
+            raise ValueError("calibration sessions must use an empty key map")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -754,6 +759,7 @@ class InputSessionSpec:
             "latency_p95_target_ms": self.latency_p95_target_ms,
             "disconnect_grace_ms": self.disconnect_grace_ms,
             "key_map": self.key_map.to_dict(),
+            "calibration": self.calibration,
         }
 
     def digest(self) -> str:
@@ -804,12 +810,26 @@ class ControlMapping:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedCode:
+    """One distinct (type, code) pair observed during a session."""
+
+    event_type: int
+    event_code: int
+
+    def __post_init__(self) -> None:
+        for value, field in ((self.event_type, "event_type"), (self.event_code, "event_code")):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
 class InputSessionResult:
     counts: tuple[ControlCount, ...]
     latency_p95_ms: int
     unknown_count: int
     disconnected: bool
     mapping: tuple[ControlMapping, ...]
+    distinct_codes: tuple[ObservedCode, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.counts, tuple):
@@ -827,6 +847,13 @@ class InputSessionResult:
             raise TypeError("mapping must be a tuple of ControlMapping values")
         if not all(isinstance(item, ControlMapping) for item in self.mapping):
             raise TypeError("mapping must contain ControlMapping values")
+        if not isinstance(self.distinct_codes, tuple):
+            raise TypeError("distinct_codes must be a tuple of ObservedCode values")
+        if not all(isinstance(item, ObservedCode) for item in self.distinct_codes):
+            raise TypeError("distinct_codes must contain ObservedCode values")
+        pairs = [(item.event_type, item.event_code) for item in self.distinct_codes]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("distinct_codes must be unique")
 
     def meets_requirements(self, spec: InputSessionSpec) -> bool:
         if not isinstance(spec, InputSessionSpec):
@@ -880,6 +907,10 @@ class InputSessionResult:
                     "event_code": item.event_code,
                 }
                 for item in self.mapping
+            ],
+            "distinct_codes": [
+                {"event_type": item.event_type, "event_code": item.event_code}
+                for item in self.distinct_codes
             ],
         }
 

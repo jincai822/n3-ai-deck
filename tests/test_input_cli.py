@@ -3,6 +3,7 @@ from __future__ import annotations
 from streamdock_n3.hardware.contracts import (
     ErrorCode,
     InputSessionResult,
+    ObservedCode,
     OperationResult,
     ResultStatus,
 )
@@ -97,3 +98,51 @@ def test_parser_has_no_system_mutation_flags() -> None:
     assert not {"--install", "--reload", "--systemctl", "--write"} & actions
     assert "--json" in actions
     assert "--duration-ms" in actions
+
+
+def test_calibrate_flag_reports_distinct_codes() -> None:
+    class CalibrationRunner:
+        def run(self, request: IpcSessionRequest, timeout_ms: int) -> IpcSessionResponse:
+            return IpcSessionResponse(
+                OperationResult(ResultStatus.SUCCEEDED, ErrorCode.NONE, timeout_ms),
+                InputSessionResult(
+                    counts=(),
+                    latency_p95_ms=5,
+                    unknown_count=3,
+                    disconnected=False,
+                    mapping=(),
+                    distinct_codes=(ObservedCode(1, 42), ObservedCode(1, 43)),
+                ),
+            )
+
+    from streamdock_n3.input_cli import run_session_flow
+
+    rendered = run_session_flow(
+        "/dev/input/event12",
+        make_session_spec().key_map,
+        5_000,
+        session_runner=CalibrationRunner(),
+    )
+
+    assert rendered["session"]["distinct_codes"] == [
+        {"event_type": 1, "event_code": 42},
+        {"event_type": 1, "event_code": 43},
+    ]
+
+
+def test_calibration_spec_validation_rejects_mixed_key_map() -> None:
+    import pytest
+
+    from streamdock_n3.hardware.contracts import InputSessionSpec
+    from tests.hardware_fixtures import make_session_spec
+
+    with pytest.raises(ValueError, match="empty key map"):
+        InputSessionSpec(
+            duration_ms=5_000,
+            expected_press_count=10,
+            expected_rotation_count=20,
+            latency_p95_target_ms=250,
+            disconnect_grace_ms=2_000,
+            key_map=make_session_spec().key_map,
+            calibration=True,
+        )

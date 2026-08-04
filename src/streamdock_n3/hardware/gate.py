@@ -207,7 +207,7 @@ class _CapabilityGate:
                 raise GateViolation(ErrorCode.PERMISSION_PLAN_INVALID)
         if manifest.stage is Stage.G3_INPUT:
             spec = manifest.session_spec
-            if spec is None or not spec.key_map.entries:
+            if spec is None or (not spec.calibration and not spec.key_map.entries):
                 self._block_and_clear()
                 raise GateViolation(ErrorCode.INPUT_SESSION_INVALID)
         allowed = _STAGE_OPERATIONS[manifest.stage]

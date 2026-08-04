@@ -49,10 +49,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "a64f2e06712d754204b591943cc40fcb1d1c6d7772f79f9412699b2abe7dd0c9"
+        "94c1cdc90b171abd6e1586654740e6e69dcf28078b7b0787c99dfd03253e1788"
     ),
     Path("src/streamdock_n3/hardware/input_session.py"): (
-        "fda35482a9469ca5eb006d1e440700cc5eab5bf1ea6d39faf04bcb1753924544"
+        "3d6f8dd096707060f4f114ec1428c5efdbc8c2ed1f29df0ff1bbdd91d0dabc64"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
@@ -61,7 +61,7 @@ REVIEWED_SOURCE_SHA256 = {
         "bfb07fdf9bada8fa796699b37aba07cc3d684a192554963788ab543f3303e32a"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
-        "0d87d1d703d86a1b79f045c71a9e79a3d091c32d38aebff03e1fbfa079948e6f"
+        "ce17ca9d8e2f3f7710e3b77ce63e95ab28d4b96d21e3ddac920329297638bce6"
     ),
     Path("src/streamdock_n3/hardware/backend.py"): (
         "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
@@ -70,7 +70,7 @@ REVIEWED_SOURCE_SHA256 = {
         "a20a151f6572c7de3b75a250c43d3faeac30796f1958e950a9a7bae6f56e4909"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "9263a1e2c2f09d398a8084bc3ab85c62b7557a90cc95930f0d4f7c0f45c52450"
+        "fce96903b3d5e37b978703d08fcf368829dea83efb16d4b313f2ee1ff9881118"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
         "2166e04f94b564e465fb4d3608def19312fb7223ca60a8686e88e6a2ea360ef2"
@@ -1485,8 +1485,9 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     )
     control_count = contracts.ControlCount(1, input_kind, 10, 10, 0, 0)
     control_mapping = contracts.ControlMapping(1, input_kind, 1, 30)
+    observed_code = contracts.ObservedCode(1, 30)
     session_result = contracts.InputSessionResult(
-        (control_count,), 100, 0, False, (control_mapping,)
+        (control_count,), 100, 0, False, (control_mapping,), (observed_code,)
     )
     profile = contracts.DeviceProfile(
         0x6602,
@@ -1619,6 +1620,7 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             control_count,
             control_mapping,
             session_result,
+            observed_code,
         )
     }
     declared = {
