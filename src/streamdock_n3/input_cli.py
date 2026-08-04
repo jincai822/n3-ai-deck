@@ -121,19 +121,22 @@ def _input_association_dirs(resolved_interface: Path) -> tuple[Path, ...]:
     return tuple(input_dirs)
 
 
-def _verify_input_link(association: Path) -> Path | None:
-    """Verify /sys/class/input/inputN/device resolves back to the interface."""
+def _verify_input_link(resolved_interface: Path, association: Path) -> Path | None:
+    """Verify /sys/class/input/inputN/device resolves inside the interface."""
     try:
         if not association.is_dir():
             return None
         input_class_entry = INPUT_CLASS_ROOT / association.name
         if not input_class_entry.is_symlink():
             return None
+        resolved_class_entry = input_class_entry.resolve(strict=True)
+        if resolved_class_entry != association:
+            return None
         device_link = input_class_entry / "device"
         if not device_link.is_symlink():
             return None
         resolved_device = device_link.resolve(strict=True)
-        if not resolved_device.is_relative_to(association):
+        if not resolved_device.is_relative_to(resolved_interface):
             return None
         for event_entry in input_class_entry.iterdir():
             if _EVENT_NODE_RE.fullmatch(event_entry.name) is not None:
@@ -163,7 +166,7 @@ def resolve_input_node(
         except (OSError, RuntimeError):
             continue
         for name in associations:
-            event_entry = _verify_input_link(input_dir / name)
+            event_entry = _verify_input_link(resolved_interface, input_dir / name)
             if event_entry is not None:
                 return f"/dev/input/{event_entry.name}"
     raise NodeResolutionError("approved input node not found")
