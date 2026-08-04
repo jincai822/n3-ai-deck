@@ -33,7 +33,7 @@ G1's candidate profile approval boundary is defined in
 
 ## M2 — Hardware controls
 
-**Status:** In progress — G0 foundation only
+**Status:** In progress — G0 foundation and G1 candidate profile approval complete
 
 G0 is a hardware-free transactional simulation foundation. It proves ordered private
 reservations, exactly-once fake backend attempts, redacted evidence acceptance, settlement,
@@ -42,10 +42,11 @@ snapshots are validation context, not state authority.
 
 - [x] Define and test the hardware-free Adapter contracts, capability gate, FakeBackend,
   fake-only helper isolation, and redacted evidence.
-- [ ] G1: approve an exact active profile and resolve interface responsibility. The
-  hardware-free role contracts, classifier, gate pinning, and passive sysfs evidence
-  are implemented; the owner-gated real-device evidence run and approval record are
-  pending. Interface roles are approved candidate roles pending G3 physical validation.
+- [x] G1: approve an exact active profile and resolve interface responsibility. Evidence:
+  [the G1 profile approval record](docs/validation/2026-08-04-g1-profile-approval.md),
+  approval reference `owner:2026-08-04:g1-profile-approval`. Interface `01` is the
+  approved candidate input interface and interface `00` the approved candidate control
+  interface; these remain candidate roles pending G3 physical validation.
 - [ ] G2: approve any permission change separately.
 - [ ] G3–G7: validate input, initialization, brightness, one LCD, and all six LCDs through
   their independent manual gates.
