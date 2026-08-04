@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from streamdock_n3.hardware.contracts import (
     HidInterface,
     InterfaceRole,
+    PermissionArtifact,
     PermissionKind,
 )
 from streamdock_n3.hardware.permissions import (
+    InstallTransaction,
     make_permission_plan,
     persistent_rule,
     temporary_acl_plan,
@@ -95,3 +98,153 @@ def test_plan_rendering_is_redacted() -> None:
 def test_plan_requires_resolved_roles() -> None:
     with pytest.raises(ValueError):
         make_permission_plan(make_ambiguous_roles(), "test:g2")
+
+
+def make_artifact(kind: str = "rule", subsystem: str = "input") -> PermissionArtifact:
+    if kind == "rule":
+        return persistent_rule(0x6602, 0x1000, HidInterface(1, 3, 1, 1), InterfaceRole.INPUT)
+    return temporary_acl_plan(InterfaceRole.INPUT)
+
+
+def test_transaction_requires_explicit_root() -> None:
+    with pytest.raises(ValueError, match="explicit target root"):
+        InstallTransaction(None)
+
+
+@pytest.mark.parametrize("root", ("/etc", "/usr", "/etc/udev", "/usr/lib"))
+def test_transaction_rejects_system_roots(tmp_path: Path, root: str) -> None:
+    with pytest.raises(ValueError, match="system roots"):
+        InstallTransaction(Path(root))
+
+
+def test_transaction_rejects_path_filenames(tmp_path: Path) -> None:
+    transaction = InstallTransaction(tmp_path / "root")
+
+    with pytest.raises(ValueError, match="plain file name"):
+        transaction.plan_install(make_artifact(), "../escape")
+
+
+def test_verify_target_reports_symlink_owner_and_content_violations(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("secret\n", encoding="ascii")
+    (root / "rule").symlink_to(outside)
+
+    transaction = InstallTransaction(root)
+    transaction.plan_install(make_artifact(), "rule")
+
+    violations = transaction.verify_target()
+
+    assert any("symlink" in violation for violation in violations)
+
+
+def test_commit_writes_rendered_artifact_and_rollback_restores_bytes(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "99-n3.rules"
+    target.write_text("original-bytes\n", encoding="ascii")
+
+    transaction = InstallTransaction(root)
+    artifact = make_artifact()
+    transaction.plan_install(artifact, "99-n3.rules")
+    assert transaction.verify_target() == []
+    assert artifact.rendered.encode() in transaction.diff().encode()
+
+    transaction.commit()
+
+    assert target.read_text(encoding="ascii") == artifact.rendered + "\n"
+
+    transaction.rollback()
+
+    assert target.read_text(encoding="ascii") == "original-bytes\n"
+
+
+def test_rollback_without_prior_file_removes_new_target(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+
+    transaction = InstallTransaction(root)
+    transaction.plan_install(make_artifact(), "99-n3.rules")
+    transaction.commit()
+    assert (root / "99-n3.rules").exists()
+
+    transaction.rollback()
+
+    assert not (root / "99-n3.rules").exists()
+
+
+def test_commit_fails_on_verification_violations(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("x\n", encoding="ascii")
+    (root / "rule").symlink_to(outside)
+
+    transaction = InstallTransaction(root)
+    transaction.plan_install(make_artifact(), "rule")
+
+    with pytest.raises(ValueError, match="target verification failed"):
+        transaction.commit()
+
+    assert (root / "rule").is_symlink()
+
+
+def test_commit_rejects_empty_plan_and_double_commit(tmp_path: Path) -> None:
+    transaction = InstallTransaction(tmp_path / "root")
+
+    with pytest.raises(ValueError, match="nothing planned"):
+        transaction.commit()
+
+    transaction.plan_install(make_artifact(), "rule")
+    transaction.commit()
+
+    with pytest.raises(ValueError, match="already committed"):
+        transaction.commit()
+
+
+def test_rollback_failure_is_reported_not_fabricated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    target = root / "rule"
+    target.write_text("original\n", encoding="ascii")
+    transaction = InstallTransaction(root)
+    transaction.plan_install(make_artifact(), "rule")
+    transaction.commit()
+
+    def failing_write_bytes(self: Path, data: bytes) -> None:
+        del self, data
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(type(target), "write_bytes", failing_write_bytes)
+
+    with pytest.raises(OSError, match="rollback incomplete"):
+        transaction.rollback()
+
+
+def test_no_write_occurs_without_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    calls: list[str] = []
+
+    original = Path.write_text
+    monkeypatch.setattr(
+        Path,
+        "write_text",
+        lambda self, *args, **kwargs: calls.append(str(self)),
+    )
+
+    transaction = InstallTransaction(root)
+    transaction.plan_install(make_artifact(), "rule")
+    transaction.verify_target()
+
+    assert calls == []
+    original(root / "rule", "direct-check\n", encoding="ascii")
+    monkeypatch.undo()
+    assert (root / "rule").read_text(encoding="ascii") == "direct-check\n"
