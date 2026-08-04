@@ -16,6 +16,8 @@ G1's candidate profile approval boundary is defined in
 [the G1 profile approval plan](docs/superpowers/plans/2026-08-04-m2-g1-profile-approval.md).
 G2's offline permission design is defined in
 [the G2 minimal permissions plan](docs/superpowers/plans/2026-08-04-m2-g2-minimal-permissions.md).
+G3's read-only input observation is defined in
+[the G3 input observation plan](docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md).
 
 ## M0 — Public foundation
 
@@ -55,7 +57,12 @@ snapshots are validation context, not state authority.
   artifacts are offline templates, no permission was granted, and no system
   state was changed; any real ACL/udev installation remains a separate
   owner-gated manual action before G3.
-- [ ] G3–G7: validate input, initialization, brightness, one LCD, and all six LCDs through
+- [ ] G3: validate input through read-only observation. The codec, session runner,
+  machine-backed gate, and redacted session evidence are implemented (see the
+  [G3 plan](docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md)); the
+  owner-gated real-device session and approval remain pending. No device write
+  has occurred.
+- [ ] G4–G7: validate initialization, brightness, one LCD, and all six LCDs through
   their independent manual gates.
 
 ## M3 — Extensible action engine

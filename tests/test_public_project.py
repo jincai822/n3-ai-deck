@@ -171,7 +171,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "owner:2026-08-04:g1-profile-approval",
         "candidate roles pending G3 physical validation",
         "- [x] G2:",
-        "- [ ] G3–G7:",
+        "- [ ] G4–G7:",
     ):
         assert required in roadmap
 
@@ -232,6 +232,31 @@ def test_public_docs_describe_g2_offline_permission_boundary() -> None:
     assert "docs/validation/2026-08-04-g2-permission-approval.md" in roadmap
     assert "owner:2026-08-04:g2" in roadmap
     assert "grants nothing" in roadmap
+
+    for text in (english, architecture, roadmap):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
+def test_public_docs_describe_g3_read_only_boundary() -> None:
+    english = read_text("README.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "read-only",
+        "bounded",
+        "O_RDONLY",
+        "never writes",
+    ):
+        assert required.lower() in "\n".join((english, architecture)).lower()
+
+    assert "machine-backed" in architecture
+    assert "zero automatic recovery writes" in architecture
+    assert "- [ ] G3:" in roadmap
+    assert "docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md" in roadmap
 
     for text in (english, architecture, roadmap):
         for line in text.splitlines():

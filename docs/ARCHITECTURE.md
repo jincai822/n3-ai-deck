@@ -38,6 +38,10 @@ G1 approves an exact candidate active profile and resolves interface responsibil
 
 G2 designs permissions offline and grants nothing. Pure generators render a temporary single-node ACL plan (default first strategy, placeholders only, never executed) and precise persistent udev rule templates matching exactly `6602:1000` plus the validated subsystem/interface with `TAG+="uaccess"`; `MODE="0666"`, vendor-only matches, and unproven combined grants are rejected by tests. An offline install transaction applies artifacts only to an explicit target root that can never be `/etc` or `/usr`, verifying target state before commit and rolling back byte-for-byte. The G2 gate requires a permission plan covering exactly the input and hidraw subsystems justified by the pinned G1 roles and records redacted approval evidence. No permission was granted, no system file was written, and no permission command was executed; any real ACL or udev installation remains a separate owner-gated manual action before G3.
 
+## G3 implemented read-only input boundary
+
+G3 observes physical inputs through one bounded, read-only, short-lived helper session. A pure evdev codec parses raw `input_event` bytes and normalizes them through a configurable key map; the session opens exactly one approved input node `O_RDONLY`, runs a select-bounded loop with per-control counts and p95 read-to-normalize latency, counts unknown events without ever persisting raw payloads, and classifies read errors as `DISCONNECTED` within a bounded grace with zero automatic recovery writes and no reopen. The G3 gate requires a session spec and settles machine-backed: `INPUT_VALIDATED` only when every control meets its press/release/rotation counts, latency is within target, and the session did not disconnect. Session evidence records counts, latency, unknown count, and a disconnect flag with redacted digests. Automated tests never open `/dev`; the real session remains an owner-gated manual action (temporary ACL, exact command/expectation/deadline/recovery presented before execution).
+
 ## Public components
 
 ### Device adapter

@@ -55,14 +55,16 @@ class RawInputEvent:
 
 @dataclass(frozen=True, slots=True)
 class KeyMapEntry:
+    event_type: int          # evdev event type (1 = EV_KEY)
+    event_code: int          # evdev key/rel code
     control_id: int
     kind: InputKind          # BUTTON / KNOB_PRESS / KNOB_ROTATE
     press_action: InputAction  # PRESS for buttons; LEFT for knob rotation
-    # release_action derived: RELEASE for buttons; RIGHT for knob rotation
+    # action_for_value(value): PRESS/RELEASE for buttons; LEFT/RIGHT by sign for rotation
 
 @dataclass(frozen=True, slots=True)
 class KeyMap:
-    entries: tuple[KeyMapEntry, ...]     # unique (type, code) pairs
+    entries: tuple[KeyMapEntry, ...]     # unique (event_type, event_code) pairs
     def lookup(self, raw: RawInputEvent) -> tuple[KeyMapEntry, InputAction] | None
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +84,7 @@ class InputSessionResult:
     unknown_count: int
     disconnected: bool
     mapping: tuple[ControlMapping, ...]  # observed (control -> type/code), redacted
-    # meets_requirements() -> bool; digest(); to_dict() redacted
+    # meets_requirements(spec) -> bool; digest(); to_dict() redacted
 
 @dataclass(frozen=True, slots=True)
 class ControlCount:

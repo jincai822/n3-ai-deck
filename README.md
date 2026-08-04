@@ -46,6 +46,8 @@ G1 extends this passive discovery to resolve interface responsibility: the same 
 
 G2 designs permissions entirely offline and grants nothing: a temporary single-node ACL plan (placeholders only) and precise `6602:1000`-exact `TAG+="uaccess"` udev rule templates, plus an install transaction that only ever targets an explicit non-system root. No permission was granted, no system file was written, and no permission command was executed; any real ACL or udev installation stays a separate manual action.
 
+G3 observes physical inputs through one bounded, read-only session (`n3-ai-deck-observe-inputs`): the helper opens exactly one approved input node `O_RDONLY`, never writes, never grabs, never loads the SDK, and stops at disconnect with zero automatic recovery writes. The session counts per-control presses/rotations, measures p95 latency, and records redacted evidence; the gate advances only on machine-backed results. Automated tests never open `/dev`; the real-device session is an owner-gated manual action.
+
 ## Planned flow
 
 ```text
