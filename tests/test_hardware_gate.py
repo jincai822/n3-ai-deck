@@ -193,6 +193,29 @@ def test_forward_and_recovery_are_exact_and_lifo() -> None:
     assert gate.state is AdapterState.BLOCKED
 
 
+def test_premature_recovery_reservation_during_forward_blocks_fail_closed() -> None:
+    gate = advance_to(Stage.G7_SIX_LCD)
+    gate.begin(make_profile(), make_manifest(Stage.G7_SIX_LCD), TEST_COMMIT)
+    first = gate.reserve_forward(forward_commands(Stage.G7_SIX_LCD)[0])
+    gate.settle(first, success())
+    assert gate.capability_snapshot.phase is StagePhase.FORWARD
+    epoch = gate.capability_snapshot.epoch
+
+    premature = gate.reserve_recovery(
+        AdapterCommand(Operation.SET_KEY_IMAGE, key=1, image=b"base-1")
+    )
+
+    assert gate.state is AdapterState.BLOCKED
+    assert gate.session_snapshot == StageSessionSnapshot(
+        Stage.G7_SIX_LCD, StagePhase.RECOVERY, 1, 1, True
+    )
+    assert gate.capability_snapshot.epoch == epoch + 1
+
+    gate.settle(premature, success())
+    assert gate.capability_snapshot.phase is StagePhase.READY
+    assert gate.preview_completion(True, True).next_state is AdapterState.BLOCKED
+
+
 def test_disconnect_is_distinct_and_clears_all_queues() -> None:
     gate = _CapabilityGate()
     gate.begin(make_profile(), make_manifest(Stage.G1_PROFILE), TEST_COMMIT)

@@ -24,6 +24,8 @@ fake-only isolated helper process
 
 `N3Adapter` is the sole stateful transaction coordinator. Its private gate owns ordered reservations, result settlement, recovery, and stage commits; the backend and evidence sinks receive no live gate authority. The helper path is independent: `N3Adapter` does not invoke it, and it returns only an `OperationResult` without connecting to the Adapter's evidence recorder. Helper snapshots are validation context, not state authority.
 
+Evidence acceptance is mandatory before settlement: if an external evidence sink raises, the gate blocks and the stage cannot advance. When an evidence failure coincides with a backend `DISCONNECTED` result, the disconnect classification takes priority over `EVIDENCE_FAILURE`: evidence is still recorded as failed, but the Adapter returns the disconnect result and enters `DISCONNECTED`, clearing all queues with zero automatic recovery writes.
+
 `FakeBackend` is the only implemented backend. G0 does not activate `6602:1000`: that identifier remains a candidate, unvalidated, and has no selected production interface or active profile. G0 does not import the vendored SDK, open `/dev`, install permissions, or write hardware.
 
 G1 chooses and approves an exact active profile and interface responsibility; G2 covers separately approved permissions; G3–G7 cover input, initialization, brightness, one LCD, and six LCDs. The legacy daemon, action, plugin, and UI flow remains planned and disconnected from the G0 Adapter.
