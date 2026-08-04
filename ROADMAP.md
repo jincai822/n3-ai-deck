@@ -12,6 +12,8 @@ The transactional G0 safety boundary is defined in
 [the transactional Adapter safety design](docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md)
 and its
 [hardening plan](docs/superpowers/plans/2026-08-03-m2-g0-transactional-adapter-safety-hardening.md).
+G1's candidate profile approval boundary is defined in
+[the G1 profile approval plan](docs/superpowers/plans/2026-08-04-m2-g1-profile-approval.md).
 
 ## M0 — Public foundation
 
@@ -40,7 +42,10 @@ snapshots are validation context, not state authority.
 
 - [x] Define and test the hardware-free Adapter contracts, capability gate, FakeBackend,
   fake-only helper isolation, and redacted evidence.
-- [ ] G1: approve an exact active profile and resolve interface responsibility.
+- [ ] G1: approve an exact active profile and resolve interface responsibility. The
+  hardware-free role contracts, classifier, gate pinning, and passive sysfs evidence
+  are implemented; the owner-gated real-device evidence run and approval record are
+  pending. Interface roles are approved candidate roles pending G3 physical validation.
 - [ ] G2: approve any permission change separately.
 - [ ] G3–G7: validate input, initialization, brightness, one LCD, and all six LCDs through
   their independent manual gates.

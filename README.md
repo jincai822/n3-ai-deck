@@ -42,6 +42,8 @@ uv run n3-ai-deck-detect --json
 
 The inherited daemon, probe, debug, GUI, and install commands are outside M1's read-only guarantee and must not be used for `6602:1000` in M1. Their corresponding legacy entry points are not safe substitutes for this command.
 
+G1 extends this passive discovery to resolve interface responsibility: the same sysfs-only command now reports a role (`input` / `control` / `unknown`) and its redacted evidence basis for each HID interface, and an `interface_selection` of `resolved` / `ambiguous` / `none`. A resolved candidate profile and its roles are approved explicitly through the `N3Adapter` G1 gate; approval is a candidate-profile decision, not a compatibility claim. Roles remain approved candidate roles pending G3 physical validation, and `6602:1000` remains a candidate with unvalidated protocol.
+
 ## Planned flow
 
 ```text

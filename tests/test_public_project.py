@@ -180,6 +180,32 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
+def test_public_docs_describe_g1_candidate_profile_approval() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "interface responsibility",
+        "candidate profile",
+        "passive",
+        "G3 physical validation",
+    ):
+        assert required in "\n".join((english, architecture))
+
+    assert "approved candidate roles" in architecture
+    assert "pending G3 physical validation" in architecture
+    assert "role classifier" in architecture
+    assert "docs/superpowers/plans/2026-08-04-m2-g1-profile-approval.md" in roadmap
+
+    for text in (english, chinese, architecture, roadmap):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english

@@ -30,6 +30,10 @@ Evidence acceptance is mandatory before settlement: if an external evidence sink
 
 G1 chooses and approves an exact active profile and interface responsibility; G2 covers separately approved permissions; G3–G7 cover input, initialization, brightness, one LCD, and six LCDs. The legacy daemon, action, plugin, and UI flow remains planned and disconnected from the G0 Adapter.
 
+## G1 implemented safety boundary
+
+G1 approves an exact candidate active profile and resolves interface responsibility from passive sysfs evidence only; it never opens `/dev` or loads the SDK. A pure role classifier maps boot-keyboard and input-subsystem interfaces to `INPUT`, and vendor-HID interfaces without an input association to `CONTROL`; any ambiguity, incomplete evidence, or later identity/interface/role drift fails closed at the gate. The approved profile and roles are pinned at G1 commit and every later stage must match exactly. Approved roles are approved candidate roles pending G3 physical validation: `6602:1000` remains a candidate with unvalidated protocol, and no compatibility claim is made.
+
 ## Public components
 
 ### Device adapter
