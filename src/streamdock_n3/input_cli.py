@@ -17,6 +17,7 @@ from streamdock_n3.hardware.contracts import (
     CommandSpec,
     CommandStep,
     DeviceProfile,
+    ErrorCode,
     HidInterface,
     InputAction,
     InputKind,
@@ -27,7 +28,9 @@ from streamdock_n3.hardware.contracts import (
     Stage,
     StageManifest,
 )
+from streamdock_n3.hardware.gate import GateViolation
 from streamdock_n3.hardware.interface_roles import InterfaceRoleEvidence, resolve_roles
+from streamdock_n3.hardware.permissions import make_permission_plan
 
 DEFAULT_SYSFS_ROOT = Path("/sys/bus/usb/devices")
 SYS_DEVICES_ROOT = Path("/sys/devices")
@@ -266,6 +269,73 @@ def _render_result(adapter: N3Adapter, node: str) -> dict[str, object]:
     }
 
 
+def _advance_approvals(adapter: N3Adapter, manifest: StageManifest) -> None:
+    adapter.begin_stage(
+        StageManifest(
+            stage=Stage.G1_PROFILE,
+            commit=manifest.commit,
+            profile_digest=manifest.profile_digest,
+            interface=manifest.interface,
+            steps=(CommandStep(CommandSpec.from_command(AdapterCommand(Operation.APPROVE_PROFILE))),),
+            deadline_ms=5_000,
+            expected_result="g1-validated",
+            recovery_plan="g1-recovery",
+            approval_reference=manifest.approval_reference,
+            role_resolution=manifest.role_resolution,
+        )
+    )
+    adapter.execute(AdapterCommand(Operation.APPROVE_PROFILE))
+    adapter.complete_stage(True)
+    resolution = manifest.role_resolution
+    if resolution is None:
+        raise GateViolation(ErrorCode.INPUT_SESSION_INVALID)
+    permission_plan = make_permission_plan(resolution, manifest.approval_reference)
+    adapter.begin_stage(
+        StageManifest(
+            stage=Stage.G2_PERMISSION,
+            commit=manifest.commit,
+            profile_digest=manifest.profile_digest,
+            interface=manifest.interface,
+            steps=(CommandStep(CommandSpec.from_command(AdapterCommand(Operation.RECORD_PERMISSION))),),
+            deadline_ms=5_000,
+            expected_result="g2-validated",
+            recovery_plan="g2-recovery",
+            approval_reference=manifest.approval_reference,
+            role_resolution=manifest.role_resolution,
+            permission_plan=permission_plan,
+        )
+    )
+    adapter.execute(AdapterCommand(Operation.RECORD_PERMISSION))
+    adapter.complete_stage(True)
+
+
+def run_session_flow(
+    node: str,
+    key_map: KeyMap,
+    duration_ms: int,
+    session_runner: object | None = None,
+) -> dict[str, object]:
+    spec = _build_session_spec(key_map, duration_ms)
+    manifest = _build_manifest(spec)
+    profile = _build_profile()
+    adapter = N3Adapter(
+        profile,
+        COMMIT,
+        FakeBackend(),
+        session_runner=session_runner,  # type: ignore[arg-type]
+        input_node=node,
+    )
+    _advance_approvals(adapter, manifest)
+    adapter.begin_stage(manifest)
+    rendered = _render_result(adapter, node)
+    if rendered["session"] is not None and rendered["state"] not in (
+        "input_validated",
+    ):
+        adapter.complete_stage(True)
+        rendered["state"] = adapter.state.value
+    return rendered
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="n3-ai-deck-observe-inputs",
@@ -302,23 +372,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     key_map = _load_key_map(cast(Path | None, args.key_map))
     use_json = cast(bool, args.json)
 
-    node = resolve_input_node()
-    spec = _build_session_spec(key_map, duration_ms)
-    manifest = _build_manifest(spec)
-    profile = _build_profile()
-    adapter = N3Adapter(
-        profile,
-        COMMIT,
-        FakeBackend(),
-        input_node=node,
-    )
-    adapter.begin_stage(manifest)
-    rendered = _render_result(adapter, node)
-    if rendered["session"] is not None and rendered["state"] not in (
-        "input_validated",
-    ):
-        adapter.complete_stage(True)
-        rendered = _render_result(adapter, node)
+    try:
+        node = resolve_input_node()
+        rendered = run_session_flow(node, key_map, duration_ms)
+    except (GateViolation, NodeResolutionError, ValueError) as error:
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "status": "rejected",
+                    "error_code": getattr(error, "code", "invalid_input_session"),
+                }
+            )
+        )
+        return 1
     if use_json:
         print(json.dumps(rendered, ensure_ascii=True, indent=2))
     else:

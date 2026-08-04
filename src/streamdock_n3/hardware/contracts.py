@@ -850,8 +850,8 @@ class InputSessionResult:
                     return False
             else:
                 if (
-                    count.press_count < spec.expected_press_count
-                    or count.release_count < spec.expected_press_count
+                    count.press_count != spec.expected_press_count
+                    or count.release_count != spec.expected_press_count
                 ):
                     return False
         return True

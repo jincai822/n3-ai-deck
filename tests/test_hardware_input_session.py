@@ -19,6 +19,7 @@ from streamdock_n3.hardware.contracts import (
 )
 from streamdock_n3.hardware.input_session import (
     EvdevReadOnlyBackend,
+    InputFileHandle,
     InputSessionError,
     run_input_session,
 )
@@ -218,3 +219,49 @@ def test_latency_p95_is_computed_from_read_to_normalize() -> None:
 
     assert result.latency_p95_ms >= 0
     assert result.latency_p95_ms <= spec().latency_p95_target_ms
+
+
+def test_real_backend_surfaces_read_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    import select as select_module
+
+    import streamdock_n3.hardware.input_session as input_session_module
+
+    backend = EvdevReadOnlyBackend()
+    handle = InputFileHandle(999, opened_read_only=True)
+
+    def raise_read(fd: int, size: int) -> bytes:
+        del fd, size
+        raise OSError(19, "ENODEV")
+
+    monkeypatch.setattr(input_session_module.os, "read", raise_read)
+    monkeypatch.setattr(
+        select_module,
+        "select",
+        lambda *args, **kwargs: ([args[0][0]], [], []),
+    )
+
+    with pytest.raises(OSError):
+        list(backend.read_events(handle, time.monotonic_ns() + 10**9))
+
+
+
+
+def test_real_backend_treats_empty_read_as_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import select as select_module
+
+    import streamdock_n3.hardware.input_session as input_session_module
+
+    backend = EvdevReadOnlyBackend()
+    handle = InputFileHandle(999, opened_read_only=True)
+
+    monkeypatch.setattr(input_session_module.os, "read", lambda fd, size: b"")
+    monkeypatch.setattr(
+        select_module,
+        "select",
+        lambda *args, **kwargs: ([args[0][0]], [], []),
+    )
+
+    with pytest.raises(OSError):
+        list(backend.read_events(handle, time.monotonic_ns() + 10**9))

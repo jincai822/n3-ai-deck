@@ -96,6 +96,8 @@ class ReadOnlyInputBackend(Protocol):
 class EvdevReadOnlyBackend:
     """Real backend: exactly one O_RDONLY open, select-bounded reads, no writes."""
 
+    POLL_INTERVAL_MS = 100
+
     def open_read_only(self, node: str) -> InputFileHandle:
         if not isinstance(node, str) or not node:
             raise ValueError("device node must be a non-empty path")
@@ -113,15 +115,16 @@ class EvdevReadOnlyBackend:
             remaining_ns = deadline_ns - time.monotonic_ns()
             if remaining_ns <= 0:
                 return
-            readable, _, _ = select.select((handle.fileno,), (), (), remaining_ns / 1e9)
+            poll_ns = min(remaining_ns, self.POLL_INTERVAL_MS * 1_000_000)
+            readable, _, _ = select.select((handle.fileno,), (), (), poll_ns / 1e9)
             if not readable:
-                return
+                continue
             try:
                 payload = os.read(handle.fileno, _INPUT_EVENT_SIZE * 16)
             except OSError:
-                return
+                raise
             if not payload:
-                return
+                raise OSError("readable input node returned no data")
             for offset in range(0, len(payload) - _INPUT_EVENT_SIZE + 1, _INPUT_EVENT_SIZE):
                 chunk = payload[offset : offset + _INPUT_EVENT_SIZE]
                 if len(chunk) != _INPUT_EVENT_SIZE:

@@ -49,10 +49,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "1a281b989b231263b60e566013f3bcb1e6859e654091b23db0d64f850d9cde03"
+        "a64f2e06712d754204b591943cc40fcb1d1c6d7772f79f9412699b2abe7dd0c9"
     ),
     Path("src/streamdock_n3/hardware/input_session.py"): (
-        "ef78b5eeadc18dcf0693089753f58326bf36bff6148fafa58af3cbb395f4188d"
+        "ffe6469ad64aa5166b28eb93d3a25dd9094a5c36954b5af20c0398ed7c08d34c"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
