@@ -32,6 +32,7 @@ class EvidenceDisposition(StrEnum):
 class EvidenceKind(StrEnum):
     OPERATION = "operation"
     STAGE = "stage"
+    PROFILE_APPROVAL = "profile_approval"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,7 @@ class EvidenceRecord:
     approval_reference: str
     adapter_state: AdapterState | None
     recovery_status: RecoveryStatus | None
+    role_resolution_digest: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -82,6 +84,8 @@ class EvidenceRecord:
         if not isinstance(self.interface, HidInterface):
             raise TypeError("interface must be a HidInterface")
         if self.kind is EvidenceKind.OPERATION:
+            if self.role_resolution_digest is not None:
+                raise ValueError("role_resolution_digest only applies to profile approval")
             if not isinstance(self.operation, Operation):
                 raise TypeError("operation evidence requires an Operation")
             if not isinstance(self.status, ResultStatus):
@@ -90,7 +94,33 @@ class EvidenceRecord:
                 raise TypeError("operation evidence requires an ErrorCode")
             if self.adapter_state is not None or self.recovery_status is not None:
                 raise ValueError("operation evidence cannot include stage outcome")
+        elif self.kind is EvidenceKind.PROFILE_APPROVAL:
+            if any(
+                value is not None
+                for value in (
+                    self.operation,
+                    self.brightness,
+                    self.key,
+                    self.status,
+                )
+            ):
+                raise ValueError("profile approval evidence cannot include operation outcome")
+            if self.error_code is not None and not isinstance(self.error_code, ErrorCode):
+                raise TypeError("error_code must be an ErrorCode or None")
+            if self.payload_size or self.duration_ms or self.event_count:
+                raise ValueError("profile approval evidence counters must be zero")
+            if (
+                not isinstance(self.role_resolution_digest, str)
+                or len(self.role_resolution_digest) != 64
+            ):
+                raise ValueError("profile approval evidence requires a role resolution digest")
+            if self.adapter_state is not AdapterState.PROFILE_APPROVED:
+                raise ValueError("profile approval evidence requires PROFILE_APPROVED state")
+            if self.recovery_status is not RecoveryStatus.NOT_REQUIRED:
+                raise ValueError("profile approval evidence requires NOT_REQUIRED recovery")
         else:
+            if self.role_resolution_digest is not None:
+                raise ValueError("role_resolution_digest only applies to profile approval")
             if any(
                 value is not None
                 for value in (
@@ -135,6 +165,7 @@ class EvidenceRecord:
             "recovery_status": (
                 self.recovery_status.value if self.recovery_status is not None else None
             ),
+            "role_resolution_digest": self.role_resolution_digest,
         }
 
 
@@ -267,4 +298,38 @@ def stage_evidence(
         approval_reference=manifest.approval_reference,
         adapter_state=state,
         recovery_status=recovery_status,
+    )
+
+
+def profile_approval_evidence(
+    profile: DeviceProfile,
+    manifest: StageManifest,
+    epoch: int,
+) -> EvidenceRecord:
+    resolution = manifest.role_resolution
+    if resolution is None:
+        raise ValueError("profile approval requires a role resolution")
+    return EvidenceRecord(
+        schema_version=SCHEMA_VERSION,
+        kind=EvidenceKind.PROFILE_APPROVAL,
+        disposition=EvidenceDisposition.ATTEMPT,
+        epoch=epoch,
+        stage=manifest.stage,
+        commit=manifest.commit,
+        profile_digest=profile.digest(),
+        interface=manifest.interface,
+        operation=None,
+        brightness=None,
+        key=None,
+        payload_size=0,
+        status=None,
+        error_code=None,
+        duration_ms=0,
+        event_count=0,
+        expected_result=manifest.expected_result,
+        recovery_plan=manifest.recovery_plan,
+        approval_reference=manifest.approval_reference,
+        adapter_state=AdapterState.PROFILE_APPROVED,
+        recovery_status=RecoveryStatus.NOT_REQUIRED,
+        role_resolution_digest=resolution.digest(),
     )

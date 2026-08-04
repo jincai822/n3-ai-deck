@@ -59,7 +59,7 @@ REVIEWED_SOURCE_SHA256 = {
         "eaf68b254d8a2461abcca8b5f8ef30d8f5687afb9c66c60ab277b14b0cf7ad8d"
     ),
     Path("src/streamdock_n3/hardware/adapter.py"): (
-        "4f7c0bbbd6a98ce82bd8513fa44ce01fc14c9c2aa9f8587cc9884988d86ef1ba"
+        "1b6b6a5dbd5730add59d67525aac8aa546c8d910dda3d41381e2c9452d377922"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
         "c3bf0cb263d6f30d657497c8821982135de78f1707a4aca9610879fff800cc5b"
@@ -68,7 +68,7 @@ REVIEWED_SOURCE_SHA256 = {
         "f2c43b1cdac1d1b44b73dde3ff1866801e9306dc185329062fdb9c762b0f79ea"
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
-        "f48f4792f130dde3a4d533e9b77be197bb75beb90371a5f0585c601165aef3db"
+        "f4d31f8364eafc6dc4460967f853d2e35419970f88ad4c8994b891c8a14353b3"
     ),
     Path("src/streamdock_n3/__init__.py"): (
         "0612dae9f893b0736b2bbc584afc2fa001e4e7468ab622a9e0061453f5b4d04b"

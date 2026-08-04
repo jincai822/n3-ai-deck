@@ -14,6 +14,7 @@ from streamdock_n3.hardware.contracts import (
     HidInterface,
     OperationResult,
     ResultStatus,
+    Stage,
     StageManifest,
     StageSessionSnapshot,
 )
@@ -22,6 +23,7 @@ from streamdock_n3.hardware.evidence import (
     EvidenceRecorder,
     EvidenceSink,
     operation_evidence,
+    profile_approval_evidence,
     stage_evidence,
 )
 from streamdock_n3.hardware.gate import GateViolation, _CapabilityGate
@@ -147,13 +149,19 @@ class N3Adapter:
                 manual_confirmation,
                 recovery_confirmation,
             )
-            record = stage_evidence(
-                self._profile,
-                manifest,
-                preview.next_state,
-                preview.recovery_status,
-                preview.epoch,
-            )
+            if (
+                manifest.stage is Stage.G1_PROFILE
+                and preview.next_state is AdapterState.PROFILE_APPROVED
+            ):
+                record = profile_approval_evidence(self._profile, manifest, preview.epoch)
+            else:
+                record = stage_evidence(
+                    self._profile,
+                    manifest,
+                    preview.next_state,
+                    preview.recovery_status,
+                    preview.epoch,
+                )
             token = self._evidence.begin(record)
 
             def write_external_evidence() -> None:

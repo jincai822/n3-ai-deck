@@ -18,7 +18,11 @@ from streamdock_n3.hardware.contracts import (
     Stage,
     StageManifest,
 )
-from streamdock_n3.hardware.evidence import EvidenceDisposition, EvidenceRecord
+from streamdock_n3.hardware.evidence import (
+    EvidenceDisposition,
+    EvidenceKind,
+    EvidenceRecord,
+)
 from streamdock_n3.hardware.gate import GateViolation
 from tests.hardware_fixtures import (
     TEST_COMMIT,
@@ -518,6 +522,12 @@ def test_g1_approval_pins_approved_profile_with_roles() -> None:
     assert approved.bcd_device == 0x0300
     assert approved.pinned_commit == TEST_COMMIT
     assert len(approved.role_resolution_digest) == 64
+
+    approval = adapter.evidence_records[-1]
+    assert approval.kind is EvidenceKind.PROFILE_APPROVAL
+    assert approval.disposition is EvidenceDisposition.COMMITTED
+    assert approval.role_resolution_digest == approved.role_resolution_digest
+    assert approval.approval_reference == "test:g1_profile"
 
 
 def test_g1_without_role_resolution_rejects_and_stays_candidate() -> None:
