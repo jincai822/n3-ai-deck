@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -57,6 +58,11 @@ def add_input_association(
     capabilities.mkdir(parents=True, exist_ok=True)
     (capabilities / "ev").write_text(ev + "\n", encoding="ascii")
     (capabilities / "key").write_text(key + "\n", encoding="ascii")
+
+
+def add_hidraw_node(class_root: Path, name: str, target: Path) -> None:
+    (class_root / name).mkdir(parents=True, exist_ok=True)
+    (class_root / name / "device").symlink_to(target, target_is_directory=True)
 
 
 def warning_codes(report: discovery.DiscoveryReport) -> list[str]:
@@ -260,6 +266,7 @@ def test_raw_attributes_are_normalized(tmp_path: Path) -> None:
         "input_kind": None,
         "role": "unknown",
         "role_basis": ["hid_interface"],
+        "hidraw_node": None,
     }
 
 
@@ -320,6 +327,7 @@ def test_report_schema_is_closed_and_report_values_are_immutable(tmp_path: Path)
                         "input_kind": None,
                         "role": "control",
                         "role_basis": ["no_input_association", "vendor_hid"],
+                        "hidraw_node": None,
                     }
                 ],
             }
@@ -561,7 +569,22 @@ def configure_trusted_roots(
     devices_root.mkdir()
     monkeypatch.setattr(discovery, "DEFAULT_SYSFS_ROOT", bus_root.resolve())
     monkeypatch.setattr(discovery, "SYS_DEVICES_ROOT", devices_root.resolve())
+    monkeypatch.setattr(
+        discovery,
+        "HIDRAW_CLASS_ROOT",
+        (tmp_path / "class" / "hidraw").resolve(),
+        raising=False,
+    )
     return bus_root, devices_root
+
+
+def configure_hidraw_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path]:
+    bus_root, devices_root = configure_trusted_roots(tmp_path, monkeypatch)
+    class_root = tmp_path / "class" / "hidraw"
+    class_root.mkdir(parents=True)
+    return bus_root, devices_root, class_root
 
 
 def test_trusted_mode_accepts_scoped_device_and_interface_links(
@@ -767,3 +790,214 @@ def test_unreadable_attribute_produces_stable_warning(
     assert report.devices[0].bcd_device is None
     assert warning_codes(report) == [WarningCode.UNREADABLE_ATTRIBUTE]
     assert report.warnings[0].attribute == "bcdDevice"
+
+
+def test_interface_with_hidraw_node_reports_device_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-1", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-1", "1.0", "00", "03", "00", "00"
+    )
+    hid_device = resolved_interface / "0003:6602:1000.0001"
+    hid_device.mkdir()
+    add_hidraw_node(class_root, "hidraw0", hid_device)
+    (bus_root / "22-1").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-1:1.0").symlink_to(resolved_interface, target_is_directory=True)
+
+    report = discover_usb_devices(bus_root)
+
+    interface = report.devices[0].hid_interfaces[0]
+    assert interface.hidraw_node == "/dev/hidraw0"
+    assert interface.to_dict()["hidraw_node"] == "/dev/hidraw0"
+
+
+def test_interface_without_hidraw_node_has_null_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, _ = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-2", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-2", "1.0", "00", "03", "00", "00"
+    )
+    (bus_root / "22-2").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-2:1.0").symlink_to(resolved_interface, target_is_directory=True)
+
+    report = discover_usb_devices(bus_root)
+
+    interface = report.devices[0].hid_interfaces[0]
+    assert interface.hidraw_node is None
+    assert interface.to_dict()["hidraw_node"] is None
+
+
+def test_multiple_hidraw_nodes_map_to_their_own_interfaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-3", "6602", "1000", "0300")
+    control = add_interface(resolved_device, "22-3", "1.0", "00", "03", "00", "00")
+    input_interface = add_interface(
+        resolved_device, "22-3", "1.1", "01", "03", "01", "01"
+    )
+    control_hid = control / "0003:6602:1000.0001"
+    input_hid = input_interface / "0003:6602:1000.0002"
+    control_hid.mkdir()
+    input_hid.mkdir()
+    add_hidraw_node(class_root, "hidraw0", control_hid)
+    add_hidraw_node(class_root, "hidraw1", input_hid)
+    (bus_root / "22-3").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-3:1.0").symlink_to(control, target_is_directory=True)
+    (bus_root / "22-3:1.1").symlink_to(input_interface, target_is_directory=True)
+
+    report = discover_usb_devices(bus_root)
+
+    by_number = {item.number: item for item in report.devices[0].hid_interfaces}
+    assert by_number["00"].hidraw_node == "/dev/hidraw0"
+    assert by_number["01"].hidraw_node == "/dev/hidraw1"
+
+
+def test_two_hidraw_nodes_for_same_interface_pick_lowest_number(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-4", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-4", "1.0", "00", "03", "00", "00"
+    )
+    hid_device = resolved_interface / "0003:6602:1000.0001"
+    hid_device.mkdir()
+    add_hidraw_node(class_root, "hidraw1", hid_device)
+    add_hidraw_node(class_root, "hidraw0", hid_device)
+    (bus_root / "22-4").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-4:1.0").symlink_to(resolved_interface, target_is_directory=True)
+
+    report = discover_usb_devices(bus_root)
+
+    assert report.devices[0].hid_interfaces[0].hidraw_node == "/dev/hidraw0"
+
+
+def test_hidraw_node_of_another_device_is_not_attached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-5", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-5", "1.0", "00", "03", "00", "00"
+    )
+    other = add_usb_device(devices_root, "22-6", "6602", "1000", "0300")
+    other_interface = add_interface(other, "22-6", "1.0", "00", "03", "00", "00")
+    other_hid = other_interface / "0003:6602:1000.0001"
+    other_hid.mkdir()
+    add_hidraw_node(class_root, "hidraw0", other_hid)
+    (bus_root / "22-5").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-5:1.0").symlink_to(resolved_interface, target_is_directory=True)
+    (bus_root / "22-6").symlink_to(other, target_is_directory=True)
+    (bus_root / "22-6:1.0").symlink_to(other_interface, target_is_directory=True)
+
+    report = discover_usb_devices(bus_root)
+
+    by_name = {item.sysfs_name: item for item in report.devices}
+    assert by_name["22-5"].hid_interfaces[0].hidraw_node is None
+    assert by_name["22-6"].hid_interfaces[0].hidraw_node == "/dev/hidraw0"
+
+
+def test_hidraw_device_link_escaping_devices_root_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-7", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-7", "1.0", "00", "03", "00", "00"
+    )
+    (bus_root / "22-7").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-7:1.0").symlink_to(resolved_interface, target_is_directory=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    add_hidraw_node(class_root, "hidraw0", outside)
+
+    report = discover_usb_devices(bus_root)
+
+    assert report.devices[0].hid_interfaces[0].hidraw_node is None
+    assert any(
+        warning.code is WarningCode.UNSAFE_SYMLINK
+        and warning.sysfs_name == "hidraw0"
+        for warning in report.warnings
+    )
+
+
+def test_untrusted_mode_reports_no_hidraw_nodes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_usb_device(tmp_path, "22-8", "6602", "1000", "0300")
+    add_interface(tmp_path, "22-8", "1.0", "00", "03", "00", "00")
+    outside_hid = tmp_path / "hid-device"
+    outside_hid.mkdir()
+    class_root = tmp_path / "class" / "hidraw"
+    add_hidraw_node(class_root, "hidraw0", outside_hid)
+    monkeypatch.setattr(discovery, "HIDRAW_CLASS_ROOT", class_root.resolve())
+
+    report = discover_usb_devices(tmp_path)
+
+    assert report.devices[0].hid_interfaces[0].hidraw_node is None
+    assert report.warnings == ()
+
+
+def test_hidraw_entry_without_device_link_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-9", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-9", "1.0", "00", "03", "00", "00"
+    )
+    (bus_root / "22-9").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-9:1.0").symlink_to(resolved_interface, target_is_directory=True)
+    plain = class_root / "hidraw0"
+    plain.mkdir(parents=True)
+    (plain / "device").write_text("not a link\n", encoding="ascii")
+
+    report = discover_usb_devices(bus_root)
+
+    assert report.devices[0].hid_interfaces[0].hidraw_node is None
+    assert report.warnings == ()
+
+
+def test_invalid_hidraw_entry_name_warns_without_echoing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-10", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-10", "1.0", "00", "03", "00", "00"
+    )
+    (bus_root / "22-10").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-10:1.0").symlink_to(resolved_interface, target_is_directory=True)
+    (class_root / "hidraw\x1b[31m").mkdir(parents=True)
+    (class_root / "misc0").mkdir(parents=True)
+
+    report = discover_usb_devices(bus_root)
+
+    assert report.devices[0].hid_interfaces[0].hidraw_node is None
+    assert warning_codes(report) == [WarningCode.INVALID_SYSFS_NAME]
+    assert report.warnings[0].sysfs_name is None
+
+
+def test_json_cli_output_includes_hidraw_node_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    bus_root, devices_root, class_root = configure_hidraw_roots(tmp_path, monkeypatch)
+    resolved_device = add_usb_device(devices_root, "22-11", "6602", "1000", "0300")
+    resolved_interface = add_interface(
+        resolved_device, "22-11", "1.0", "00", "03", "00", "00"
+    )
+    hid_device = resolved_interface / "0003:6602:1000.0001"
+    hid_device.mkdir()
+    add_hidraw_node(class_root, "hidraw0", hid_device)
+    (bus_root / "22-11").symlink_to(resolved_device, target_is_directory=True)
+    (bus_root / "22-11:1.0").symlink_to(resolved_interface, target_is_directory=True)
+
+    assert discovery.main(["--sysfs-root", str(bus_root), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["devices"][0]["hid_interfaces"][0]["hidraw_node"] == "/dev/hidraw0"

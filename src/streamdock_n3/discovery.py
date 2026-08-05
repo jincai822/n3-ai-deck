@@ -39,8 +39,11 @@ ALLOWED_INPUT_ATTRIBUTES = frozenset({"ev", "key"})
 _SAFE_SYSFS_NAME: Final = re.compile(r"[A-Za-z0-9._:-]+")
 _INPUT_ASSOCIATION_RE: Final = re.compile(r"input[0-9]+")
 _HID_DEVICE_RE: Final = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\.[0-9a-fA-F]+")
+_HIDRAW_NAME_RE: Final = re.compile(r"hidraw[0-9]+")
 _HEX_4: Final = re.compile(r"[0-9A-Fa-f]{1,4}")
 _HEX_2: Final = re.compile(r"[0-9A-Fa-f]{1,2}")
+
+HIDRAW_CLASS_ROOT = Path("/sys/class/hidraw")
 
 
 class WarningCode(StrEnum):
@@ -80,6 +83,7 @@ class HidInterfaceObservation:
     input_kind: str | None
     role: str
     role_basis: tuple[str, ...]
+    hidraw_node: str | None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -91,6 +95,7 @@ class HidInterfaceObservation:
             "input_kind": self.input_kind,
             "role": self.role,
             "role_basis": list(self.role_basis),
+            "hidraw_node": self.hidraw_node,
         }
 
 
@@ -379,12 +384,63 @@ def _interface_selection(
     return "ambiguous"
 
 
+def _scan_hidraw_nodes(
+    trusted_sysfs: bool,
+    warnings: list[DiscoveryWarning],
+) -> tuple[tuple[str, Path], ...]:
+    """Resolve hidraw device links to their sysfs device chains, sysfs-pure."""
+    if not trusted_sysfs:
+        return ()
+    try:
+        resolved_root = HIDRAW_CLASS_ROOT.resolve(strict=True)
+        if not resolved_root.is_dir():
+            return ()
+        entries = tuple(sorted(resolved_root.iterdir(), key=lambda item: item.name))
+    except (OSError, RuntimeError):
+        return ()
+
+    nodes: list[tuple[str, Path]] = []
+    for entry in entries:
+        if _SAFE_SYSFS_NAME.fullmatch(entry.name) is None:
+            warnings.append(_warning(WarningCode.INVALID_SYSFS_NAME))
+            continue
+        if _HIDRAW_NAME_RE.fullmatch(entry.name) is None:
+            continue
+        device_link = entry / "device"
+        try:
+            if not device_link.is_symlink():
+                continue
+            resolved = device_link.resolve(strict=True)
+        except (OSError, RuntimeError):
+            warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, entry.name))
+            continue
+        if not resolved.is_dir():
+            continue
+        if not resolved.is_relative_to(SYS_DEVICES_ROOT):
+            warnings.append(_warning(WarningCode.UNSAFE_SYMLINK, entry.name))
+            continue
+        nodes.append((entry.name, resolved))
+    return tuple(sorted(nodes, key=lambda item: int(item[0].removeprefix("hidraw"))))
+
+
+def _hidraw_node_for_interface(
+    resolved_interface: Path,
+    hidraw_nodes: Sequence[tuple[str, Path]],
+) -> str | None:
+    """Return the lowest-numbered node whose device chain resolves to the interface."""
+    for name, resolved_hid_device in hidraw_nodes:
+        if resolved_hid_device.is_relative_to(resolved_interface):
+            return str(Path("/dev") / name)
+    return None
+
+
 def _scan_hid_interfaces(
     device_entry: Path,
     resolved_device: Path,
     entries: tuple[Path, ...],
     trusted_sysfs: bool,
     warnings: list[DiscoveryWarning],
+    hidraw_nodes: Sequence[tuple[str, Path]] = (),
 ) -> tuple[HidInterfaceObservation, ...]:
     observations: list[HidInterfaceObservation] = []
     prefix = f"{device_entry.name}:"
@@ -476,6 +532,7 @@ def _scan_hid_interfaces(
                 input_kind=input_kind,
                 role=role.role.value,
                 role_basis=tuple(basis.value for basis in role.basis),
+                hidraw_node=_hidraw_node_for_interface(resolved_interface, hidraw_nodes),
             )
         )
 
@@ -517,6 +574,7 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
         return _unavailable_report()
 
     trusted_sysfs = resolved_root == DEFAULT_SYSFS_ROOT
+    hidraw_nodes = _scan_hidraw_nodes(trusted_sysfs, warnings)
     resolved_devices: dict[Path, Path] = {}
     valid_entries: list[Path] = []
     for entry in entries:
@@ -607,6 +665,7 @@ def discover_usb_devices(sysfs_root: Path = DEFAULT_SYSFS_ROOT) -> DiscoveryRepo
             valid_entry_tuple,
             trusted_sysfs,
             warnings,
+            hidraw_nodes,
         )
         interface_selection = _interface_selection(hid_interfaces)
         observations.append(
@@ -700,11 +759,14 @@ def render_human(report: DiscoveryReport) -> str:
         if device.hid_interfaces:
             lines.append("  HID interfaces:")
             for interface in device.hid_interfaces:
+                hidraw_detail = (
+                    f", hidraw {interface.hidraw_node}" if interface.hidraw_node else ""
+                )
                 lines.append(
                     "    "
                     f"{interface.number}: class {interface.class_code}, "
                     f"subclass {interface.subclass}, protocol {interface.protocol}, "
-                    f"role {interface.role}"
+                    f"role {interface.role}{hidraw_detail}"
                 )
         else:
             lines.append("  HID interfaces: none")
