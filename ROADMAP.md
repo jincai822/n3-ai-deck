@@ -82,7 +82,14 @@ snapshots are validation context, not state authority.
 
 ## M3 — Extensible action engine
 
-- Publish the plugin contract and safe local example actions.
+**Status:** In progress — plugin contract, safe builtins, and demo CLI complete
+
+- [x] Publish the plugin contract and safe local example actions. Evidence:
+  [the M3 action engine design](docs/superpowers/specs/2026-08-05-m3-action-engine-design.md),
+  approval reference `owner:2026-08-05:m3-action-engine`. The engine is
+  hardware-free today: contract, safe builtins, JSON bindings, and the
+  `n3-ai-deck-run-action` demo CLI. Wiring actions to physical events through
+  the device daemon remains planned.
 
 ## M4 — AI workflow demonstration
 

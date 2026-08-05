@@ -50,11 +50,20 @@ The planned responsibility is to own active supported USB identifiers, SDK/HID a
 
 ### Event and action engine
 
-The planned responsibility is to normalize physical events, resolve configured actions, apply timeouts, and return a structured result without provider-specific logic.
+M3 implements the action engine in `streamdock_n3.actions`: `ActionEngine`
+resolves configured actions for transport-neutral normalized events, enforces
+a hard timeout per execution, and returns a structured result without
+provider-specific logic and without raising across the plugin boundary.
+Entry-point discovery of plugins, GUI configuration, and wiring the engine to
+physical events through the device daemon remain planned.
 
 ### Plugin contract
 
-The planned responsibility is to define metadata, configuration validation, execution, and result types for local automation and AI integrations.
+M3 implements the plugin contract in `streamdock_n3.actions`: an in-process
+`ActionPlugin` protocol with metadata, configuration validation, execution,
+and structured result types, plus safe builtin plugins (an allowlisted
+launcher and a structured-log-only plugin) and file-based JSON bindings.
+Entry-point discovery and GUI configuration remain planned.
 
 ### Local UI and diagnostics
 
