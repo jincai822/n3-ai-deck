@@ -25,7 +25,7 @@
 | 机主报告的 N3 V3.0 候选 | `6602:1000` | USB ID 候选；身份未确认；协议与写入操作尚未验证 |
 | FHOOU/Mirabox N3 参考型号 | `6603:1003` | 上游已支持，等待 N3 AI Deck 重新验证 |
 
-当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构仍计划增加主动设备边界。M3 已实现动作引擎契约、安全内置插件和无硬件的演示 CLI；把动作接入实体事件仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
+当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构仍计划增加主动设备边界。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；daemon 后台接线仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
 
 > **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称。继承的 `0.2.5` 只表示上游版本脉络，并非 N3 AI Deck 的发布版本；命名和版本方案将在 `v0.1.0` 之前解决。
 
@@ -56,7 +56,21 @@ M3 已实现不接触硬件的动作引擎：进程内插件契约、带超时�
 uv run n3-ai-deck-run-action --event button.1.press --dry-run
 ```
 
-随附的默认绑定把每个标准事件都绑定到无副作用的结构化日志；从实体事件触发动作仍处于规划中。
+随附的默认绑定把每个标准事件都绑定到无副作用的结构化日志；从实体事件触发动作已通过下面的实时派发 CLI 实现，daemon 后台接线仍处于规划中。
+
+## 实时派发（`n3-ai-deck-live`）
+
+插上设备后，把实体事件实时流入动作引擎：
+
+```bash
+uv run n3-ai-deck-live --duration-ms 60000
+```
+
+每个被派发的事件输出一行 JSON（`schema_version`、`event_key`、`status`、`plugin`、`duration_ms`），最后输出一行会话汇总。会话在前台运行、有时长上限，到达时限、按 Ctrl+C 或设备断连都会干净退出。没有绑定文件时只记录日志（零副作用）；要启动白名单应用，请创建 `~/.config/streamdock-n3/bindings.json`，例如把 `button.1.press` 绑定到白名单内置 `launch_app`。CLI 会自动读取该文件，或通过 `--bindings` 指定。先预览解析结果而不打开设备：
+
+```bash
+uv run n3-ai-deck-live --dry-run
+```
 
 ## 规划中的执行链路
 

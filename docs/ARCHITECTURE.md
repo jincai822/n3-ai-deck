@@ -54,8 +54,9 @@ M3 implements the action engine in `streamdock_n3.actions`: `ActionEngine`
 resolves configured actions for transport-neutral normalized events, enforces
 a hard timeout per execution, and returns a structured result without
 provider-specific logic and without raising across the plugin boundary.
-Entry-point discovery of plugins, GUI configuration, and wiring the engine to
-physical events through the device daemon remain planned.
+Entry-point discovery of plugins and GUI configuration remain planned;
+physical-event wiring is implemented as the owner-run live CLI below, while
+daemon-managed background wiring remains planned (G8).
 
 ### Plugin contract
 
@@ -64,6 +65,19 @@ M3 implements the plugin contract in `streamdock_n3.actions`: an in-process
 and structured result types, plus safe builtin plugins (an allowlisted
 launcher and a structured-log-only plugin) and file-based JSON bindings.
 Entry-point discovery and GUI configuration remain planned.
+
+### Owner-run live dispatch
+
+The M3 engine is wired to physical events through an owner-run foreground
+CLI, `n3-ai-deck-live`: it resolves the approved vendor node, optionally sends
+the validated DIS/LIG/STP init trio once, and streams each physical event into
+the `ActionEngine` in real time, emitting one JSONL line per dispatched event
+plus a final summary. The session is bounded by a hard deadline, logs only by
+default (the shipped sample binds every standard event to structured logging),
+and exits cleanly on deadline, Ctrl+C, or disconnect with no auto-reconnect;
+engine and plugin failures never crash the session. Allowlisted app launches
+require an owner-created bindings file. Background daemonization, systemd or
+supervisor-managed auto-restart, and auto-reconnect remain planned (G8).
 
 ### Local UI and diagnostics
 

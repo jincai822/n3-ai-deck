@@ -25,7 +25,7 @@
 | Owner-reported N3 V3.0 candidate | `6602:1000` | USB ID candidate; identity not confirmed; protocol and write operations not yet validated |
 | FHOOU/Mirabox N3 reference variant | `6603:1003` | Supported by upstream; N3 AI Deck revalidation pending |
 
-The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture still plans the active device boundary. M3 implements the action engine contract, safe builtin plugins, and a hardware-free demo CLI; hardware-triggered wiring remains planned. See [ROADMAP.md](ROADMAP.md) for release gates.
+The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture still plans the active device boundary. M3 implements the action engine contract, safe builtin plugins, a hardware-free demo CLI, and an owner-run live dispatch CLI (`n3-ai-deck-live`); hardware-triggered wiring remains planned as daemon-managed background wiring. See [ROADMAP.md](ROADMAP.md) for release gates.
 
 > **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names. The inherited `0.2.5` version records upstream lineage and is not an N3 AI Deck release. Naming and versioning will be resolved before `v0.1.0`.
 
@@ -60,7 +60,31 @@ uv run n3-ai-deck-run-action --event button.1.press --dry-run
 ```
 
 The shipped default binds every standard event to structured logging with no
-side effects; executing actions from physical events remains planned.
+side effects; physical-event dispatch is implemented as the owner-run live
+CLI below, while daemon-managed background wiring remains planned.
+
+## Live dispatch (`n3-ai-deck-live`)
+
+With the device plugged in, stream physical events into the action engine in
+real time:
+
+```bash
+uv run n3-ai-deck-live --duration-ms 60000
+```
+
+Each dispatched event prints one JSON line (`schema_version`, `event_key`,
+`status`, `plugin`, `duration_ms`) and a final summary line reports the
+session counters. The session is foreground and bounded, and exits cleanly on
+deadline, Ctrl+C, or disconnect. Without a bindings file it only logs, with
+zero side effects; to launch allowlisted applications, create
+`~/.config/streamdock-n3/bindings.json`, for example binding `button.1.press`
+to the allowlisted `launch_app` builtin. The CLI picks the file up
+automatically, or pass `--bindings`. Preview the resolved setup without
+opening the device:
+
+```bash
+uv run n3-ai-deck-live --dry-run
+```
 
 ## Planned flow
 

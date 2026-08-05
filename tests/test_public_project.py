@@ -309,6 +309,49 @@ def test_public_docs_describe_m3_action_engine() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
+def test_public_docs_describe_live_dispatch() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "n3-ai-deck-live",
+        "--dry-run",
+        "zero side effects",
+        "daemon-managed background wiring remains planned",
+    ):
+        assert required in english
+
+    for required in (
+        "n3-ai-deck-live",
+        "零副作用",
+    ):
+        assert required in chinese
+
+    for required in (
+        "n3-ai-deck-live",
+        "foreground",
+        "bounded",
+        "cleanly",
+        "auto-reconnect",
+    ):
+        assert required in architecture
+
+    for required in (
+        "- [x] Owner-run live dispatch CLI",
+        "docs/superpowers/specs/2026-08-05-live-dispatch-design.md",
+        "owner:2026-08-05:live-dispatch",
+    ):
+        assert required in roadmap
+
+    for text in (english, chinese, architecture, roadmap):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english

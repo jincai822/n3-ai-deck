@@ -82,15 +82,23 @@ snapshots are validation context, not state authority.
 
 ## M3 — Extensible action engine
 
-**Status:** In progress — plugin contract, safe builtins, and demo CLI complete
+**Status:** In progress — plugin contract, safe builtins, demo CLI, and owner-run live dispatch CLI complete
 
 - [x] Publish the plugin contract and safe local example actions. Evidence:
   [the M3 action engine design](docs/superpowers/specs/2026-08-05-m3-action-engine-design.md)
   and [the on-hardware smoke record](docs/validation/2026-08-05-m3-action-engine-smoke.md),
   approval reference `owner:2026-08-05:m3-action-engine`. The engine is
   hardware-free today: contract, safe builtins, JSON bindings, and the
-  `n3-ai-deck-run-action` demo CLI. Wiring actions to physical events through
-  the device daemon remains planned.
+  `n3-ai-deck-run-action` demo CLI. Physical-event wiring is implemented as
+  the owner-run live dispatch CLI below; daemon-managed background wiring
+  remains planned (G8).
+- [x] Owner-run live dispatch CLI. Evidence:
+  [the live dispatch design](docs/superpowers/specs/2026-08-05-live-dispatch-design.md),
+  approval reference `owner:2026-08-05:live-dispatch`. `n3-ai-deck-live`
+  streams physical events into the action engine in real time — foreground,
+  bounded by a hard deadline, zero side effects by default, and a clean exit
+  on deadline, Ctrl+C, or disconnect. Background daemon wiring, auto-restart,
+  and auto-reconnect remain planned (G8).
 
 ## M4 — AI workflow demonstration
 
