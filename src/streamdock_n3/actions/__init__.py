@@ -20,6 +20,12 @@ from streamdock_n3.actions.contracts import (
     PluginMetadata,
 )
 from streamdock_n3.actions.engine import DEFAULT_TIMEOUT_SECONDS, ActionEngine, event_key_for
+from streamdock_n3.actions.live import (
+    LiveSessionResult,
+    LiveSessionSpec,
+    LiveSessionStatus,
+    run_live_loop,
+)
 
 __all__ = [
     "ALLOWLISTED_EXECUTABLES",
@@ -32,10 +38,14 @@ __all__ = [
     "ActionStatus",
     "BindingsError",
     "LaunchAppPlugin",
+    "LiveSessionResult",
+    "LiveSessionSpec",
+    "LiveSessionStatus",
     "LogEventPlugin",
     "PluginMetadata",
     "builtin_registry",
     "default_bindings_path",
     "event_key_for",
     "load_bindings",
+    "run_live_loop",
 ]
