@@ -1,0 +1,122 @@
+{
+  "button.1.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.1.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.2.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.2.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.3.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.3.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.4.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.4.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.5.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.5.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.6.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.6.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.7.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.7.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.8.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.8.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.9.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "button.9.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.1.left": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.1.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.1.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.1.right": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.2.left": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.2.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.2.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.2.right": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.3.left": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.3.press": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.3.release": {
+    "config": {},
+    "plugin": "log_event"
+  },
+  "knob.3.right": {
+    "config": {},
+    "plugin": "log_event"
+  }
+}
