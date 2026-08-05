@@ -172,7 +172,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "candidate roles pending G3 physical validation",
         "- [x] G2:",
         "- [x] G4–G6:",
-        "- [ ] G7:",
+        "- [x] G7:",
     ):
         assert required in roadmap
 

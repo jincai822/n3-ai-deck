@@ -70,9 +70,15 @@ snapshots are validation context, not state authority.
   through owner-approved minimal writes. Evidence:
   [the display validation record](docs/validation/2026-08-05-g4-g6-display-validation.md),
   approval reference `owner:2026-08-05:g4-g6-display-validation`.
-- [ ] G7: all six LCDs. The six key windows are regions of one shared panel on this
-  variant; full-screen addressing differs from SDK assumptions (`BGPIC` clears to
-  black) and needs a revised plan.
+- [x] G7: all six LCDs. The six key windows are regions of one shared panel on this
+  variant; images are not scaled but overflow from each key's anchor point, and all
+  six keys displayed their own numbered color image correctly (no cross-key bleed).
+  Evidence:
+  [the six-LCD and production regression record](docs/validation/2026-08-05-g7-six-lcd-and-production-regression.md),
+  approval reference `owner:2026-08-05:g7-six-lcd`. Full-screen addressing differs
+  from SDK assumptions (`BGPIC` clears to black) — do not use it on this variant.
+  Follow-up optimization: per-key anchor offset calibration (individual 1–2 px
+  deviations).
 
 ## M3 — Extensible action engine
 
