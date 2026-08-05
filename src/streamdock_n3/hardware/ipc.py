@@ -1,4 +1,4 @@
-"""Closed JSON protocol for the fixed, fake-only hardware helper."""
+"""Closed JSON protocol for the fixed hardware helper boundary."""
 
 from __future__ import annotations
 
@@ -119,6 +119,7 @@ _SESSION_SPEC_KEYS = frozenset(
         "disconnect_grace_ms",
         "key_map",
         "calibration",
+        "press_only",
     }
 )
 _SESSION_REQUEST_KEYS = frozenset(
@@ -150,7 +151,13 @@ _SESSION_RESPONSE_KEYS = frozenset(
         "session",
     }
 )
-_DEVICE_NODE_RE = re.compile(r"/dev/input/event[0-9]+")
+_DEVICE_NODE_RE = re.compile(r"(?:/dev/input/event[0-9]+|/dev/hidraw[0-9]+)")
+_VENDOR_HID_NODE_RE = re.compile(r"/dev/hidraw[0-9]+")
+
+
+def is_vendor_hid_node(node: str) -> bool:
+    """Return True when a validated device node names the vendor HID channel."""
+    return isinstance(node, str) and _VENDOR_HID_NODE_RE.fullmatch(node) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +212,7 @@ class IpcSessionRequest:
         if not isinstance(self.device_node, str) or _DEVICE_NODE_RE.fullmatch(
             self.device_node
         ) is None:
-            raise ValueError("device_node must be a plain input event node path")
+            raise ValueError("device_node must be a plain input event or hidraw node path")
         if (
             isinstance(self.schema_version, bool)
             or not isinstance(self.schema_version, int)
@@ -369,6 +376,7 @@ def _parse_session_spec(value: object) -> InputSessionSpec:
         disconnect_grace_ms=_require_int(wire["disconnect_grace_ms"]),
         key_map=_parse_key_map(wire["key_map"]),
         calibration=_require_bool(wire["calibration"]),
+        press_only=_require_bool(wire["press_only"]),
     )
 
 

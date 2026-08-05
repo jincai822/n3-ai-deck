@@ -35,6 +35,10 @@ from streamdock_n3.hardware.permissions import make_permission_plan
 DEFAULT_SYSFS_ROOT = Path("/sys/bus/usb/devices")
 SYS_DEVICES_ROOT = Path("/sys/devices")
 INPUT_CLASS_ROOT = Path("/sys/class/input")
+HIDRAW_CLASS_ROOT = Path("/sys/class/hidraw")
+VENDOR_KEY_MAP_PATH = (
+    Path(__file__).resolve().parent / "resources" / "keymaps" / "6602-1000.json"
+)
 
 APPROVED_VENDOR_ID = 0x6602
 APPROVED_PRODUCT_ID = 0x1000
@@ -46,6 +50,7 @@ COMMIT = "e4e9e47"
 _SAFE_SYSFS_NAME = re.compile(r"[A-Za-z0-9._:-]+")
 _INPUT_ASSOCIATION_RE = re.compile(r"input[0-9]+")
 _EVENT_NODE_RE = re.compile(r"event[0-9]+")
+_HIDRAW_NODE_RE = re.compile(r"hidraw[0-9]+")
 _HID_DEVICE_RE = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{4}:[0-9a-fA-F]{4}\.[0-9a-fA-F]+")
 
 
@@ -54,9 +59,11 @@ class NodeResolutionError(Exception):
 
 
 def _resolve_interface_real_path(
-    sysfs_root: Path, devices_root: Path
+    sysfs_root: Path,
+    devices_root: Path,
+    descriptor: tuple[int, int, int] = APPROVED_INPUT_INTERFACE,
 ) -> Path | None:
-    """Return the real path of the approved input interface, or None."""
+    """Return the real path of the approved interface descriptor, or None."""
     try:
         resolved_root = sysfs_root.resolve(strict=True)
         entries = tuple(sorted(resolved_root.iterdir(), key=lambda item: item.name))
@@ -99,10 +106,10 @@ def _resolve_interface_real_path(
             except (OSError, RuntimeError, UnicodeError):
                 continue
             try:
-                descriptor = (int(raw_class, 16), int(raw_subclass, 16), int(raw_protocol, 16))
+                candidate = (int(raw_class, 16), int(raw_subclass, 16), int(raw_protocol, 16))
             except ValueError:
                 continue
-            if descriptor == APPROVED_INPUT_INTERFACE:
+            if candidate == descriptor:
                 return resolved_interface
     return None
 
@@ -175,9 +182,42 @@ def resolve_input_node(
     raise NodeResolutionError("approved input node not found")
 
 
-def _load_key_map(path: Path | None) -> KeyMap:
+def resolve_vendor_node(
+    sysfs_root: Path = DEFAULT_SYSFS_ROOT,
+    devices_root: Path = SYS_DEVICES_ROOT,
+    hidraw_root: Path = HIDRAW_CLASS_ROOT,
+) -> str:
+    """Resolve /dev/hidrawN bound to the approved control interface, verified."""
+    resolved_interface = _resolve_interface_real_path(
+        sysfs_root, devices_root, APPROVED_CONTROL_INTERFACE
+    )
+    if resolved_interface is None:
+        raise NodeResolutionError("approved control interface not found")
+    try:
+        entries = tuple(sorted(hidraw_root.iterdir(), key=lambda item: item.name))
+    except (OSError, RuntimeError):
+        raise NodeResolutionError("hidraw class root unavailable") from None
+    for entry in entries:
+        if _HIDRAW_NODE_RE.fullmatch(entry.name) is None:
+            continue
+        try:
+            device_link = entry / "device"
+            if not device_link.is_symlink():
+                continue
+            resolved_device = device_link.resolve(strict=True)
+        except (OSError, RuntimeError):
+            continue
+        if resolved_device.is_relative_to(resolved_interface):
+            return f"/dev/{entry.name}"
+    raise NodeResolutionError("approved vendor hidraw node not found")
+
+
+def _load_key_map(path: Path | None, channel: str = "evdev") -> KeyMap:
     if path is None:
-        return KeyMap(())
+        if channel == "vendor":
+            path = VENDOR_KEY_MAP_PATH
+        else:
+            return KeyMap(())
     try:
         wire = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
@@ -215,7 +255,11 @@ def _build_profile() -> DeviceProfile:
     )
 
 
-def _build_session_spec(key_map: KeyMap, duration_ms: int) -> InputSessionSpec:
+def _build_session_spec(
+    key_map: KeyMap,
+    duration_ms: int,
+    press_only: bool = False,
+) -> InputSessionSpec:
     return InputSessionSpec(
         duration_ms=duration_ms,
         expected_press_count=10,
@@ -223,6 +267,7 @@ def _build_session_spec(key_map: KeyMap, duration_ms: int) -> InputSessionSpec:
         latency_p95_target_ms=250,
         disconnect_grace_ms=2_000,
         key_map=key_map,
+        press_only=press_only,
     )
 
 
@@ -314,8 +359,9 @@ def run_session_flow(
     key_map: KeyMap,
     duration_ms: int,
     session_runner: object | None = None,
+    press_only: bool = False,
 ) -> dict[str, object]:
-    spec = _build_session_spec(key_map, duration_ms)
+    spec = _build_session_spec(key_map, duration_ms, press_only)
     manifest = _build_manifest(spec)
     profile = _build_profile()
     adapter = N3Adapter(
@@ -374,18 +420,31 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="JSON key map file (list of event mappings)",
     )
+    parser.add_argument(
+        "--channel",
+        choices=["evdev", "vendor"],
+        default="evdev",
+        help="input channel to observe (default: evdev)",
+    )
+    parser.add_argument(
+        "--press-only",
+        action="store_true",
+        help="treat the device as press-only: no release counts are required",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     duration_ms = cast(int, args.duration_ms)
-    key_map = _load_key_map(cast(Path | None, args.key_map))
+    channel = cast(str, args.channel)
+    press_only = cast(bool, args.press_only)
+    key_map = _load_key_map(cast(Path | None, args.key_map), channel)
     use_json = cast(bool, args.json)
     calibrate = cast(bool, args.calibrate)
 
     try:
-        node = resolve_input_node()
+        node = resolve_vendor_node() if channel == "vendor" else resolve_input_node()
         if calibrate:
             spec = InputSessionSpec(
                 duration_ms=duration_ms,
@@ -395,6 +454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 disconnect_grace_ms=2_000,
                 key_map=KeyMap(()),
                 calibration=True,
+                press_only=press_only,
             )
             manifest = _build_manifest(spec)
             profile = _build_profile()
@@ -408,7 +468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             adapter.begin_stage(manifest)
             rendered = _render_result(adapter, node)
         else:
-            rendered = run_session_flow(node, key_map, duration_ms)
+            rendered = run_session_flow(node, key_map, duration_ms, press_only=press_only)
     except (GateViolation, NodeResolutionError, ValueError) as error:
         print(
             json.dumps(

@@ -26,6 +26,7 @@ G0_MODULES = (
     Path("src/streamdock_n3/hardware/input_session.py"),
     Path("src/streamdock_n3/hardware/gate.py"),
     Path("src/streamdock_n3/hardware/backend.py"),
+    Path("src/streamdock_n3/hardware/vendor_backend.py"),
     Path("src/streamdock_n3/hardware/adapter.py"),
     Path("src/streamdock_n3/hardware/ipc.py"),
     Path("src/streamdock_n3/hardware/helper_main.py"),
@@ -49,10 +50,10 @@ REVIEWED_SOURCE_SHA256 = {
         "b93b35448f1b12f064a89d2ceebf0835e2026c266d9218e676d394b01377808a"
     ),
     Path("src/streamdock_n3/hardware/contracts.py"): (
-        "94c1cdc90b171abd6e1586654740e6e69dcf28078b7b0787c99dfd03253e1788"
+        "8d4933c73d65569a0b541fb83834cf8a82c693952071e2b874abc32d690630b3"
     ),
     Path("src/streamdock_n3/hardware/input_session.py"): (
-        "3d6f8dd096707060f4f114ec1428c5efdbc8c2ed1f29df0ff1bbdd91d0dabc64"
+        "ce85ad7d864829d1b9b242be13577ad731140b09d28f77046ab22c9b82e2e053"
     ),
     Path("src/streamdock_n3/hardware/interface_roles.py"): (
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
@@ -70,10 +71,13 @@ REVIEWED_SOURCE_SHA256 = {
         "ee3efb6a51149894cbf8025d7b4b59d08a7ff88a5ca3ecf235229a6cc780a5f5"
     ),
     Path("src/streamdock_n3/hardware/ipc.py"): (
-        "fce96903b3d5e37b978703d08fcf368829dea83efb16d4b313f2ee1ff9881118"
+        "d654a0378a51eaefc30bce0c0df6dc54071e69a12474eb53a824daec87fb9513"
     ),
     Path("src/streamdock_n3/hardware/helper_main.py"): (
-        "2166e04f94b564e465fb4d3608def19312fb7223ca60a8686e88e6a2ea360ef2"
+        "0ac0cbc34608d45d8c504a8b45cea467f3c816d6fbeb6f7168deb755e7adbbe0"
+    ),
+    Path("src/streamdock_n3/hardware/vendor_backend.py"): (
+        "f171419a5d4c6966243a4b7389c5943f6bbaa27bf2ff2ea34ad7a2f387448ca5"
     ),
     Path("src/streamdock_n3/hardware/evidence.py"): (
         "5c161f09172264bac669fab49764e5775b27dd6d34ed8a52fb5e1f6d6bc150d9"
@@ -254,10 +258,17 @@ def _forbidden_source_violations(path: Path, source: str) -> list[str]:
         # "os.open" appears only as the single O_RDONLY open inside
         # EvdevReadOnlyBackend.open_read_only; the module never writes.
         violations = [forbidden for forbidden in violations if forbidden != "os.open"]
+    if path == Path("src/streamdock_n3/hardware/vendor_backend.py"):
+        # "os.open" appears only as the single O_RDWR open inside
+        # _HidrawTransport.open_read_write; the node is open solely for the
+        # duration of one execute() call inside the isolated helper.
+        violations = [forbidden for forbidden in violations if forbidden != "os.open"]
     if path == Path("src/streamdock_n3/hardware/ipc.py"):
-        # "/dev/input" appears only as the device-node validation regex
-        # constant; ipc.py never accesses device nodes itself.
-        violations = [forbidden for forbidden in violations if forbidden != "/dev/input"]
+        # "/dev/input" and "/dev/hidraw" appear only as device-node validation
+        # regex constants; ipc.py never accesses device nodes itself.
+        violations = [
+            forbidden for forbidden in violations if forbidden not in ("/dev/input", "/dev/hidraw")
+        ]
     return violations
 
 
@@ -494,27 +505,45 @@ def _call_violations(path: Path, tree: ast.Module) -> list[str]:
                 and _enclosing_class(tree, call) == "InstallTransaction"
             )
             # input_session.py may call os.open only for the single O_RDONLY
-            # device open inside EvdevReadOnlyBackend.open_read_only.
+            # device open inside each read-only backend.
             scoped_read_open = (
                 path == Path("src/streamdock_n3/hardware/input_session.py")
                 and function.attr == "open"
-                and _enclosing_class(tree, call) == "EvdevReadOnlyBackend"
+                and _enclosing_class(tree, call)
+                in ("EvdevReadOnlyBackend", "VendorHidReadOnlyBackend")
             )
-            if not scoped_install and not scoped_read_open:
+            # vendor_backend.py may call os.open only for the single O_RDWR
+            # device open inside the real vendor transport.
+            scoped_vendor_open = (
+                path == Path("src/streamdock_n3/hardware/vendor_backend.py")
+                and function.attr == "open"
+                and _enclosing_class(tree, call) == "_HidrawTransport"
+            )
+            if not scoped_install and not scoped_read_open and not scoped_vendor_open:
                 violations.append(f"{path}:{call.lineno}: conservative file method {function.attr}")
         else:
             file_functions = canonical_names & {"builtins.open", "os.open"}
             if file_functions:
                 # input_session.py may call os.open only for the single
-                # O_RDONLY device open inside EvdevReadOnlyBackend.
+                # O_RDONLY device open inside each read-only backend.
                 scoped_read_open = (
                     path == Path("src/streamdock_n3/hardware/input_session.py")
                     and file_functions == {"os.open"}
-                    and _enclosing_class(tree, call) == "EvdevReadOnlyBackend"
+                    and _enclosing_class(tree, call)
+                    in ("EvdevReadOnlyBackend", "VendorHidReadOnlyBackend")
                     and _enclosing_function(tree, call) is not None
                     and _enclosing_function(tree, call).name == "open_read_only"  # type: ignore[union-attr]
                 )
-                if not scoped_read_open:
+                # vendor_backend.py may call os.open only for the single
+                # O_RDWR device open inside the real vendor transport.
+                scoped_vendor_open = (
+                    path == Path("src/streamdock_n3/hardware/vendor_backend.py")
+                    and file_functions == {"os.open"}
+                    and _enclosing_class(tree, call) == "_HidrawTransport"
+                    and _enclosing_function(tree, call) is not None
+                    and _enclosing_function(tree, call).name == "open_read_write"  # type: ignore[union-attr]
+                )
+                if not scoped_read_open and not scoped_vendor_open:
                     violations.append(
                         f"{path}:{call.lineno}: file function {sorted(file_functions)[0]}"
                     )
@@ -1474,6 +1503,10 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
     install_transaction = permissions.InstallTransaction(Path("/tmp/n3-ai-deck-inert"))
     input_handle = input_session.InputFileHandle(-1, opened_read_only=True)
     evdev_backend = input_session.EvdevReadOnlyBackend()
+    vendor_backend = input_session.VendorHidReadOnlyBackend()
+    vendor_command_backend = modules[
+        "streamdock_n3.hardware.vendor_backend"
+    ].VendorHidCommandBackend("/dev/hidraw0")
     session_error = input_session.InputSessionError(
         contracts.ErrorCode.INPUT_SESSION_INVALID
     )
@@ -1610,6 +1643,8 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
             install_transaction,
             input_handle,
             evdev_backend,
+            vendor_backend,
+            vendor_command_backend,
             session_error,
             key_map_entry,
             session_request,
@@ -1630,7 +1665,13 @@ def test_import_and_construction_are_inert_until_fake_helper_is_explicit(
         for node in tree.body
         if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
     }
-    assert declared - {"Backend", "EvidenceSink", "ReadOnlyInputBackend", "SessionRunner"} == constructed
+    assert declared - {
+        "Backend",
+        "EvidenceSink",
+        "ReadOnlyInputBackend",
+        "SessionRunner",
+        "VendorHidTransport",
+    } == constructed
     assert calls == []
 
     helper_result = ipc.run_fake_helper(request, timeout_ms=1_000)
@@ -2207,6 +2248,7 @@ def test_complete_g0_source_closure_keeps_the_exact_brief_modules_and_dependenci
         Path("src/streamdock_n3/hardware/input_session.py"),
         Path("src/streamdock_n3/hardware/gate.py"),
         Path("src/streamdock_n3/hardware/backend.py"),
+        Path("src/streamdock_n3/hardware/vendor_backend.py"),
         Path("src/streamdock_n3/hardware/adapter.py"),
         Path("src/streamdock_n3/hardware/ipc.py"),
         Path("src/streamdock_n3/hardware/helper_main.py"),
@@ -2268,7 +2310,7 @@ def test_dependency_static_gates_reject_import_time_unsafe_regressions(
     )
 
 
-def test_reviewed_snapshot_has_the_exact_unique_sixteen_path_closure() -> None:
+def test_reviewed_snapshot_has_the_exact_unique_seventeen_path_closure() -> None:
     expected_dependencies = (
         Path("src/streamdock_n3/__init__.py"),
         Path("src/streamdock_n3/device_catalog.py"),
@@ -2282,7 +2324,7 @@ def test_reviewed_snapshot_has_the_exact_unique_sixteen_path_closure() -> None:
     )
 
     assert expected == REVIEWED_SOURCE_PATHS
-    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 16
+    assert len(REVIEWED_SOURCE_PATHS) == len(set(REVIEWED_SOURCE_PATHS)) == 17
     assert set(REVIEWED_SOURCE_SHA256) == set(REVIEWED_SOURCE_PATHS)
 
 

@@ -467,3 +467,24 @@ def test_manifest_accepts_session_spec_field() -> None:
 
     assert manifest.session_spec is spec
     assert manifest.digest() != make_manifest(Stage.G3_INPUT).digest()
+
+
+def test_session_spec_press_only_defaults_false_and_validates_type() -> None:
+    assert _session_spec().press_only is False
+    assert _session_spec().to_dict()["press_only"] is False
+    assert replace(_session_spec(), press_only=True).to_dict()["press_only"] is True
+    with pytest.raises(TypeError):
+        replace(_session_spec(), press_only=1)
+
+
+def test_session_spec_press_only_changes_digest() -> None:
+    assert _session_spec().digest() != replace(_session_spec(), press_only=True).digest()
+
+
+def test_key_map_entry_accepts_right_direction_for_knob_rotation() -> None:
+    entry = KeyMapEntry(0xFFA0, 0x91, 1, InputKind.KNOB_ROTATE, InputAction.RIGHT)
+
+    assert entry.action_for_value(1) is InputAction.RIGHT
+    assert entry.action_for_value(-1) is InputAction.LEFT
+    with pytest.raises(ValueError, match="press_action"):
+        KeyMapEntry(0xFFA0, 0x92, 1, InputKind.KNOB_ROTATE, InputAction.PRESS)

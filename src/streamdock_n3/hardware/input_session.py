@@ -1,4 +1,4 @@
-"""Pure evdev codec and read-only bounded input session for G3."""
+"""Pure evdev/vendor-HID codecs and read-only bounded input sessions for G3."""
 
 from __future__ import annotations
 
@@ -131,6 +131,64 @@ class EvdevReadOnlyBackend:
                 if len(chunk) != _INPUT_EVENT_SIZE:
                     return
                 yield parse_raw_event(chunk, time.monotonic_ns())
+
+    def close(self, handle: InputFileHandle) -> None:
+        if isinstance(handle, InputFileHandle):
+            with contextlib.suppress(OSError):
+                os.close(handle.fileno)
+
+
+VENDOR_EVENT_TYPE = 0xFFA0
+VENDOR_REPORT_SIZE = 512
+_VENDOR_CODE_OFFSET = 9
+_VENDOR_ACK_CODE = 0xFF
+
+
+def parse_vendor_report(report: bytes, monotonic_ns: int) -> RawInputEvent | None:
+    """Parse one 512-byte vendor HID report, or return None for ACK/garbage."""
+    if not isinstance(report, bytes) or len(report) != VENDOR_REPORT_SIZE:
+        return None
+    code = report[_VENDOR_CODE_OFFSET]
+    if code == _VENDOR_ACK_CODE:
+        return None
+    return RawInputEvent(VENDOR_EVENT_TYPE, code, 1, monotonic_ns)
+
+
+class VendorHidReadOnlyBackend:
+    """Vendor-channel backend: read-only 512-byte unnumbered HID reports."""
+
+    POLL_INTERVAL_MS = 100
+
+    def open_read_only(self, node: str) -> InputFileHandle:
+        if not isinstance(node, str) or not node:
+            raise ValueError("device node must be a non-empty path")
+        descriptor = os.open(node, os.O_RDONLY)
+        return InputFileHandle(descriptor, opened_read_only=True)
+
+    def read_events(
+        self,
+        handle: InputFileHandle,
+        deadline_ns: int,
+    ) -> Iterator[RawInputEvent]:
+        if not isinstance(handle, InputFileHandle) or not handle.opened_read_only:
+            raise ValueError("handle must be a read-only input handle")
+        while True:
+            remaining_ns = deadline_ns - time.monotonic_ns()
+            if remaining_ns <= 0:
+                return
+            poll_ns = min(remaining_ns, self.POLL_INTERVAL_MS * 1_000_000)
+            readable, _, _ = select.select((handle.fileno,), (), (), poll_ns / 1e9)
+            if not readable:
+                continue
+            try:
+                payload = os.read(handle.fileno, VENDOR_REPORT_SIZE)
+            except OSError:
+                raise
+            if not payload:
+                raise OSError("readable input node returned no data")
+            event = parse_vendor_report(payload, time.monotonic_ns())
+            if event is not None:
+                yield event
 
     def close(self, handle: InputFileHandle) -> None:
         if isinstance(handle, InputFileHandle):

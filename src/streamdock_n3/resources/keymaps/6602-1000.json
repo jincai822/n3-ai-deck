@@ -1,0 +1,20 @@
+[
+  {"event_type": 65440, "event_code": 1, "control_id": 1, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 2, "control_id": 2, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 3, "control_id": 3, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 4, "control_id": 4, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 5, "control_id": 5, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 6, "control_id": 6, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 37, "control_id": 7, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 48, "control_id": 8, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 49, "control_id": 9, "kind": "button", "press_action": "press"},
+  {"event_type": 65440, "event_code": 51, "control_id": 1, "kind": "knob_press", "press_action": "press"},
+  {"event_type": 65440, "event_code": 52, "control_id": 2, "kind": "knob_press", "press_action": "press"},
+  {"event_type": 65440, "event_code": 53, "control_id": 3, "kind": "knob_press", "press_action": "press"},
+  {"event_type": 65440, "event_code": 144, "control_id": 1, "kind": "knob_rotate", "press_action": "left"},
+  {"event_type": 65440, "event_code": 145, "control_id": 1, "kind": "knob_rotate", "press_action": "right"},
+  {"event_type": 65440, "event_code": 96, "control_id": 2, "kind": "knob_rotate", "press_action": "left"},
+  {"event_type": 65440, "event_code": 97, "control_id": 2, "kind": "knob_rotate", "press_action": "right"},
+  {"event_type": 65440, "event_code": 80, "control_id": 3, "kind": "knob_rotate", "press_action": "left"},
+  {"event_type": 65440, "event_code": 81, "control_id": 3, "kind": "knob_rotate", "press_action": "right"}
+]

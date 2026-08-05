@@ -681,14 +681,20 @@ class KeyMapEntry:
             raise TypeError("press_action must be an InputAction")
         _validate_int(self.control_id, "control_id", 1, 9)
         if self.kind is InputKind.KNOB_ROTATE:
-            if self.press_action is not InputAction.LEFT:
-                raise ValueError("knob rotation press_action must be LEFT")
+            if self.press_action not in (InputAction.LEFT, InputAction.RIGHT):
+                raise ValueError("knob rotation press_action must be LEFT or RIGHT")
         elif self.press_action is not InputAction.PRESS:
             raise ValueError("discrete control press_action must be PRESS")
 
     def action_for_value(self, value: int) -> InputAction:
         if self.kind is InputKind.KNOB_ROTATE:
-            return InputAction.LEFT if value >= 0 else InputAction.RIGHT
+            if value >= 0:
+                return self.press_action
+            return (
+                InputAction.RIGHT
+                if self.press_action is InputAction.LEFT
+                else InputAction.LEFT
+            )
         return InputAction.PRESS if value else InputAction.RELEASE
 
 
@@ -737,6 +743,7 @@ class InputSessionSpec:
     disconnect_grace_ms: int
     key_map: KeyMap
     calibration: bool = False
+    press_only: bool = False
 
     def __post_init__(self) -> None:
         _validate_int(self.duration_ms, "duration_ms", 1, MAX_DEADLINE_MS)
@@ -748,6 +755,8 @@ class InputSessionSpec:
             raise TypeError("key_map must be a KeyMap")
         if not isinstance(self.calibration, bool):
             raise TypeError("calibration must be a bool")
+        if not isinstance(self.press_only, bool):
+            raise TypeError("press_only must be a bool")
         if self.calibration and self.key_map.entries:
             raise ValueError("calibration sessions must use an empty key map")
 
@@ -760,6 +769,7 @@ class InputSessionSpec:
             "disconnect_grace_ms": self.disconnect_grace_ms,
             "key_map": self.key_map.to_dict(),
             "calibration": self.calibration,
+            "press_only": self.press_only,
         }
 
     def digest(self) -> str:
@@ -876,10 +886,9 @@ class InputSessionResult:
                 ):
                     return False
             else:
-                if (
-                    count.press_count != spec.expected_press_count
-                    or count.release_count != spec.expected_press_count
-                ):
+                if count.press_count != spec.expected_press_count:
+                    return False
+                if not spec.press_only and count.release_count != spec.expected_press_count:
                     return False
         return True
 

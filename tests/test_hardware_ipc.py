@@ -1044,9 +1044,56 @@ def test_session_request_round_trips_with_closed_schema() -> None:
 
 
 def test_session_request_rejects_arbitrary_device_nodes() -> None:
-    for node in ("/dev/hidraw0", "/tmp/event12", "event12", "/dev/input/eventx"):
+    for node in (
+        "/dev/hidraw",
+        "/dev/hidrawx",
+        "/dev/hidraw0/extra",
+        "/tmp/event12",
+        "event12",
+        "/dev/input/eventx",
+    ):
         with pytest.raises(ValueError):
             replace(valid_session_request(), device_node=node)
+
+
+def test_session_request_accepts_hidraw_vendor_nodes() -> None:
+    request = replace(valid_session_request(), device_node="/dev/hidraw7")
+
+    decoded = decode_session_request(encode_session_request(request))
+
+    assert decoded == request
+    assert decoded.device_node == "/dev/hidraw7"
+
+
+def test_session_request_round_trips_press_only_spec() -> None:
+    spec = valid_session_request().manifest.session_spec
+    assert spec is not None
+    request = replace(
+        valid_session_request(),
+        manifest=replace(
+            valid_session_request().manifest,
+            session_spec=replace(spec, press_only=True),
+        ),
+    )
+
+    encoded = encode_session_request(request)
+    wire = json.loads(encoded)
+
+    assert wire["manifest"]["session_spec"]["press_only"] is True
+    decoded = decode_session_request(encoded)
+    assert decoded == request
+    assert decoded.manifest.session_spec is not None
+    assert decoded.manifest.session_spec.press_only is True
+
+
+def test_helper_selects_backend_by_device_node_path() -> None:
+    from streamdock_n3.hardware.input_session import (
+        EvdevReadOnlyBackend,
+        VendorHidReadOnlyBackend,
+    )
+
+    assert isinstance(helper_main._select_backend("/dev/input/event3"), EvdevReadOnlyBackend)
+    assert isinstance(helper_main._select_backend("/dev/hidraw3"), VendorHidReadOnlyBackend)
 
 
 def test_session_response_round_trips_redacted_summary() -> None:

@@ -1,11 +1,11 @@
-"""Entry point for the isolated read-only hardware helper."""
+"""Entry point for the isolated hardware helper."""
 
 from __future__ import annotations
 
 import sys
 import time
 
-from streamdock_n3.hardware.backend import FakeBackend
+from streamdock_n3.hardware.backend import Backend, FakeBackend
 from streamdock_n3.hardware.contracts import (
     ErrorCode,
     OperationResult,
@@ -16,6 +16,8 @@ from streamdock_n3.hardware.gate import CommandPolicy, GateViolation
 from streamdock_n3.hardware.input_session import (
     EvdevReadOnlyBackend,
     InputSessionError,
+    ReadOnlyInputBackend,
+    VendorHidReadOnlyBackend,
     run_input_session,
 )
 from streamdock_n3.hardware.ipc import (
@@ -28,6 +30,12 @@ from streamdock_n3.hardware.ipc import (
     decode_session_request,
     encode_response,
     encode_session_response,
+    is_vendor_hid_node,
+)
+from streamdock_n3.hardware.vendor_backend import (
+    VENDOR_COMMAND_OPERATIONS,
+    VendorHidCommandBackend,
+    manifest_uses_vendor_channel,
 )
 
 
@@ -44,6 +52,38 @@ def _read_framed_payload() -> str:
     return payload
 
 
+def _select_backend(node: str) -> ReadOnlyInputBackend:
+    """Select the read-only backend matching the validated device node path."""
+    if is_vendor_hid_node(node):
+        return VendorHidReadOnlyBackend()
+    return EvdevReadOnlyBackend()
+
+
+def _select_command_backend(request: IpcSessionRequest) -> Backend:
+    """Select the real vendor backend only for validated vendor-channel commands."""
+    if (
+        request.command.operation in VENDOR_COMMAND_OPERATIONS
+        and is_vendor_hid_node(request.device_node)
+        and manifest_uses_vendor_channel(request.manifest)
+    ):
+        return VendorHidCommandBackend(request.device_node)
+    return FakeBackend()
+
+
+def _run_command(request: IpcSessionRequest) -> IpcSessionResponse:
+    """Execute one non-session command carrying its freshly resolved device node."""
+    CommandPolicy.validate(
+        request.profile,
+        request.capability,
+        request.manifest,
+        request.step_index,
+        request.command,
+    )
+    backend = _select_command_backend(request)
+    result = backend.execute(request.command, request.manifest)
+    return IpcSessionResponse(result, None)
+
+
 def _run_session(request: IpcSessionRequest) -> IpcSessionResponse:
     spec = request.manifest.session_spec
     if spec is None or request.manifest.stage is not Stage.G3_INPUT:
@@ -56,8 +96,9 @@ def _run_session(request: IpcSessionRequest) -> IpcSessionResponse:
         request.command,
     )
     started_ns = time.monotonic_ns()
+    backend = _select_backend(request.device_node)
     try:
-        session = run_input_session(spec, request.device_node, EvdevReadOnlyBackend())
+        session = run_input_session(spec, request.device_node, backend)
     except InputSessionError as error:
         return IpcSessionResponse(
             OperationResult(ResultStatus.REJECTED, error.code, 0),
@@ -82,7 +123,9 @@ def _handle_request() -> OperationResult | IpcSessionResponse:
     except ValueError:
         request = decode_session_request(payload)
     if isinstance(request, IpcSessionRequest):
-        return _run_session(request)
+        if request.manifest.stage is Stage.G3_INPUT or request.manifest.session_spec is not None:
+            return _run_session(request)
+        return _run_command(request)
     CommandPolicy.validate(
         request.profile,
         request.capability,
