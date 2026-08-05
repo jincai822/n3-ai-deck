@@ -57,8 +57,9 @@ snapshots are validation context, not state authority.
   artifacts are offline templates, no permission was granted, and no system
   state was changed; any real ACL/udev installation remains a separate
   owner-gated manual action before G3.
-- [x] G3: validate input through read-only observation. The original evdev path was
-  falsified on real hardware (see the
+- [x] G3: validate input through read-only observation. The original evdev path
+  (designed in the [G3 plan](docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md))
+  was falsified on real hardware (see the
   [blocked record](docs/validation/2026-08-05-g3-input-observation-blocked.md));
   input was instead physically validated for all 12 controls over the vendor HID
   channel, with owner-approved minimal init writes required for the LCD keys (see the

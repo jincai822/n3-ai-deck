@@ -171,7 +171,8 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "owner:2026-08-04:g1-profile-approval",
         "candidate roles pending G3 physical validation",
         "- [x] G2:",
-        "- [ ] G4–G7:",
+        "- [x] G4–G6:",
+        "- [ ] G7:",
     ):
         assert required in roadmap
 
@@ -255,7 +256,7 @@ def test_public_docs_describe_g3_read_only_boundary() -> None:
 
     assert "machine-backed" in architecture
     assert "zero automatic recovery writes" in architecture
-    assert "- [ ] G3:" in roadmap
+    assert "- [x] G3:" in roadmap
     assert "docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md" in roadmap
 
     for text in (english, architecture, roadmap):
