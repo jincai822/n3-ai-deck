@@ -57,11 +57,14 @@ snapshots are validation context, not state authority.
   artifacts are offline templates, no permission was granted, and no system
   state was changed; any real ACL/udev installation remains a separate
   owner-gated manual action before G3.
-- [ ] G3: validate input through read-only observation. The codec, session runner,
-  machine-backed gate, and redacted session evidence are implemented (see the
-  [G3 plan](docs/superpowers/plans/2026-08-04-m2-g3-input-observation.md)); the
-  owner-gated real-device session and approval remain pending. No device write
-  has occurred.
+- [x] G3: validate input through read-only observation. The original evdev path was
+  falsified on real hardware (see the
+  [blocked record](docs/validation/2026-08-05-g3-input-observation-blocked.md));
+  input was instead physically validated for all 12 controls over the vendor HID
+  channel, with owner-approved minimal init writes required for the LCD keys (see the
+  [vendor-channel record](docs/validation/2026-08-05-g3-vendor-channel-input-observation.md),
+  approval reference `owner:2026-08-05:g3-vendor-input-observation`). The G1 candidate
+  profile and the G3 gate design need revision to adopt this path.
 - [ ] G4–G7: validate initialization, brightness, one LCD, and all six LCDs through
   their independent manual gates.
 
