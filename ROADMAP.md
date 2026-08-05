@@ -65,8 +65,13 @@ snapshots are validation context, not state authority.
   [vendor-channel record](docs/validation/2026-08-05-g3-vendor-channel-input-observation.md),
   approval reference `owner:2026-08-05:g3-vendor-input-observation`). The G1 candidate
   profile and the G3 gate design need revision to adopt this path.
-- [ ] G4–G7: validate initialization, brightness, one LCD, and all six LCDs through
-  their independent manual gates.
+- [x] G4–G6: initialization (DIS+LIG+STP), brightness, and one LCD key image validated
+  through owner-approved minimal writes. Evidence:
+  [the display validation record](docs/validation/2026-08-05-g4-g6-display-validation.md),
+  approval reference `owner:2026-08-05:g4-g6-display-validation`.
+- [ ] G7: all six LCDs. The six key windows are regions of one shared panel on this
+  variant; full-screen addressing differs from SDK assumptions (`BGPIC` clears to
+  black) and needs a revised plan.
 
 ## M3 — Extensible action engine
 
