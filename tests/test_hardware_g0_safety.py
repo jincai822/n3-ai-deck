@@ -95,7 +95,7 @@ REVIEWED_SOURCE_SHA256 = {
         "7a53ba40c632e712d390f00b4d42d4b6aab32a33c8e130b3e16735a735ad33fd"
     ),
     Path("pyproject.toml"): (
-        "6f1e43272281d7adeda46a8607f4a8ad9157aa0bd5a4b2f41da621958eee8384"
+        "9777056d4f52bfa1bbecae98be0fc5e04a5f051420c67c4c6aeeadf9a452cf6c"
     ),
 }
 

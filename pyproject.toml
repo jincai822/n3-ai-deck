@@ -51,6 +51,7 @@ Upstream = "https://github.com/asad-albadi/streamdock-n3"
 
 [project.scripts]
 n3-ai-deck-detect = "streamdock_n3.discovery:main"
+n3-ai-deck-live = "streamdock_n3.actions.live_cli:main"
 n3-ai-deck-observe-inputs = "streamdock_n3.input_cli:main"
 n3-ai-deck-run-action = "streamdock_n3.actions.cli:main"
 streamdock-n3 = "streamdock_n3.daemon:main"
