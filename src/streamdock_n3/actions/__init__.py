@@ -40,10 +40,19 @@ from streamdock_n3.actions.live import (
     LiveSessionStatus,
     run_live_loop,
 )
+from streamdock_n3.actions.service import (
+    DEFAULT_BACKOFF_SCHEDULE,
+    ServiceResult,
+    ServiceSpec,
+    ServiceStatus,
+    ServiceStopped,
+    run_service,
+)
 
 __all__ = [
     "ALLOWLISTED_EXECUTABLES",
     "DEFAULT_API_KEY_ENV",
+    "DEFAULT_BACKOFF_SCHEDULE",
     "DEFAULT_BASE_URL",
     "DEFAULT_MODEL",
     "DEFAULT_PROMPT",
@@ -64,6 +73,10 @@ __all__ = [
     "LiveSessionStatus",
     "LogEventPlugin",
     "PluginMetadata",
+    "ServiceResult",
+    "ServiceSpec",
+    "ServiceStatus",
+    "ServiceStopped",
     "STATE_COLORS",
     "builtin_registry",
     "default_bindings_path",
@@ -71,5 +84,6 @@ __all__ = [
     "load_bindings",
     "render_state_image",
     "run_live_loop",
+    "run_service",
     "write_key_image",
 ]
