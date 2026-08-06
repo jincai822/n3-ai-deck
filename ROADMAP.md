@@ -116,4 +116,9 @@ snapshots are validation context, not state authority.
 
 ## M5 — v0.1.0
 
-- Publish reproducible artifacts only after CI and the physical validation checklist pass.
+- [x] Publish reproducible artifacts only after CI and the physical validation checklist pass.
+  Evidence:
+  [the v0.1.0 release gate record](docs/validation/2026-08-05-v0.1.0-release-gate.md),
+  approval reference `owner:2026-08-05:v0.1.0-release`. CI passed on the release
+  commit, the physical validation checklist is 10/10, and the `v0.1.0` tag and
+  GitHub Release (wheel + sdist + SHA256SUMS) are published on the owner's fork.
