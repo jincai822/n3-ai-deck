@@ -93,7 +93,8 @@ snapshots are validation context, not state authority.
   the owner-run live dispatch CLI below; daemon-managed background wiring
   remains planned (G8).
 - [x] Owner-run live dispatch CLI. Evidence:
-  [the live dispatch design](docs/superpowers/specs/2026-08-05-live-dispatch-design.md),
+  [the live dispatch design](docs/superpowers/specs/2026-08-05-live-dispatch-design.md)
+  and [the on-hardware validation record](docs/validation/2026-08-05-live-dispatch.md),
   approval reference `owner:2026-08-05:live-dispatch`. `n3-ai-deck-live`
   streams physical events into the action engine in real time — foreground,
   bounded by a hard deadline, zero side effects by default, and a clean exit
