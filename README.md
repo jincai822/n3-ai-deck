@@ -18,6 +18,26 @@
 - Keep credentials and execution local by default.
 - Add integrations through the documented plugin contract and safe builtin plugins.
 
+## Install (v0.1.0)
+
+Install the v0.1.0 release wheel with pipx (requires [pipx](https://pipx.pypa.io/)):
+
+```bash
+pipx install https://github.com/jincai822/n3-ai-deck/releases/download/v0.1.0/streamdock_n3_linux-0.1.0-py3-none-any.whl
+```
+
+With the device plugged in, run the owner-run live dispatch CLI to stream physical events into the action engine in real time:
+
+```bash
+n3-ai-deck-live --feedback
+```
+
+`--feedback` writes per-key LCD state images (running / success / failure / timeout) through the validated key-image path. The release also installs `n3-ai-deck-run-action` for hardware-free action runs, plus the discovery and bounded read-only observation commands (`n3-ai-deck-detect`, `n3-ai-deck-observe-inputs`). See the [release notes](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.1.0) and [CHANGELOG.md](CHANGELOG.md).
+
+**v0.1.0 scope.** The v0.1.0 release ships the validated owner-run path. G8 daemon-managed background wiring (auto-restart, auto-reconnect, background live dispatch) is **not included** in v0.1.0.
+
+**Upstream legacy commands.** The distribution also installs the inherited upstream console scripts — `streamdock-n3`, `streamdock-n3-gui`, `streamdock-n3-probe`, `streamdock-n3-debug`, and the legacy install command. They are upstream legacy, kept for continuity, and are **not part of the validated N3 AI Deck path**; do not use them for the validated `6602:1000` flow (see the M1 section).
+
 ## Current status
 
 | Hardware | USB ID | Status |
@@ -27,7 +47,7 @@
 
 The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture's active device boundary — adapter, vendor backends, and owner-run live dispatch — is implemented and hardware-validated (M2–M4). M3 implements the action engine contract, safe builtin plugins, a hardware-free demo CLI, and an owner-run live dispatch CLI (`n3-ai-deck-live`); hardware-triggered wiring remains planned as daemon-managed background wiring. See [ROADMAP.md](ROADMAP.md) for release gates.
 
-> **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names. The inherited `0.2.5` version records upstream lineage and is not an N3 AI Deck release. Naming and versioning will be resolved before `v0.1.0`.
+> **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names, labeled as upstream legacy. Naming and versioning are resolved for v0.1.0: the distribution version is now `0.1.0`, and the inherited `0.2.5` lineage — which was not an N3 AI Deck release — is recorded in the CHANGELOG.
 
 ## Safe read-only discovery (M1)
 

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.0 — 2026-08-05
+
+### Added
+
+- N3 AI Deck fork foundation (M0): this distribution now builds, tests, and
+  releases as its own project with its own CI, security, and contribution
+  processes, upstream of the inherited package.
+- M1 read-only discovery: `n3-ai-deck-detect` inspects approved sysfs USB/HID
+  metadata only; it never opens device nodes, loads the vendored SDK, changes
+  permissions, or writes hardware.
+- M2 hardware controls, validated on the owner's `6602:1000` unit:
+  - G0 hardware-free transactional adapter foundation (`N3Adapter` gate,
+    `FakeBackend`, isolated helper process, redacted evidence).
+  - G1 candidate profile approval with input/control role resolution from
+    passive sysfs evidence.
+  - G2 offline permission plan: temporary single-node ACL and exact udev rule
+    templates that grant nothing.
+  - G3 input observation: the boot-keyboard evdev path was falsified on
+    hardware; all 12 controls were validated over the vendor HID channel
+    (LCD keys require the minimal init sequence).
+  - G4–G6: init trio, brightness, and a single LCD key image validated.
+  - G7: all six LCD keys validated through the production frame pipeline,
+    plus a production input-path regression (38:38).
+  - Calibrated key map: six LCD keys, three round buttons, and three knobs
+    (press and rotation codes).
+- M3 extensible action engine: in-process plugin contract, timeout-enforcing
+  engine, safe builtin plugins, JSON bindings, and the hardware-free
+  `n3-ai-deck-run-action` demo CLI.
+- Owner-run live dispatch CLI (`n3-ai-deck-live`): foreground, bounded, zero
+  side effects by default, clean exit on deadline, Ctrl+C, or disconnect;
+  23/23 physical presses dispatched on hardware.
+- M4 AI workflow: `ai_text` plugin with local credentials, LCD state feedback
+  (running/success/failure/timeout), and the `--feedback` and
+  `--timeout-seconds` live CLI flags; golden run achieved 11/11 on hardware.
+- Physical validation checklist (`docs/validation/physical-validation-checklist.md`)
+  as the M5 release gate.
+- Public documentation refresh: honest Early Preview status, architecture,
+  roadmap, and dated validation evidence.
+
+### Changed
+
+- Distribution version reset from the inherited upstream `0.2.5` to `0.1.0`;
+  the upstream lineage is recorded in the Notes below.
+
+### Notes
+
+- G8 daemon-managed background wiring (auto-restart, auto-reconnect,
+  background live dispatch) is not included in v0.1.0; the owner-run
+  foreground CLI is the shipped path.
+- Vendored-SDK commercial redistribution review remains an open item before
+  any commercial distribution.
+- This release is a fork of the upstream Stream Dock N3 project by Asad Al
+  Badi, distributed under the MIT license with attribution preserved.
+
 ## 0.2.5 — 2026-06-03
 
 ### Fixed

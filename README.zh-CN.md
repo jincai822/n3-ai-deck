@@ -18,6 +18,26 @@
 - API 凭据和执行过程默认留在本机。
 - 通过已文档化的插件契约和安全的本地插件增加新的集成。
 
+## 安装（v0.1.0）
+
+用 pipx 安装 v0.1.0 发布轮子（需要 [pipx](https://pipx.pypa.io/)）：
+
+```bash
+pipx install https://github.com/jincai822/n3-ai-deck/releases/download/v0.1.0/streamdock_n3_linux-0.1.0-py3-none-any.whl
+```
+
+插入设备后，运行机主运行的实时派发 CLI，把实体事件实时流入动作引擎：
+
+```bash
+n3-ai-deck-live --feedback
+```
+
+`--feedback` 通过已验证的按键图像路径写入每个按键的 LCD 状态图像（执行中 / 成功 / 失败 / 超时）。发布内容还包含 `n3-ai-deck-run-action`（无硬件动作运行）以及发现和限时只读观测命令（`n3-ai-deck-detect`、`n3-ai-deck-observe-inputs`）。发布说明见 [releases/tag/v0.1.0](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.1.0)，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+
+**v0.1.0 范围。** v0.1.0 发布包含已验证的机主运行路径。G8 daemon 后台接线（自动重启、自动重连、后台实时派发）**不包含**在 v0.1.0 中。
+
+**上游遗留命令。** 分发包同时安装继承的上游控制台脚本——`streamdock-n3`、`streamdock-n3-gui`、`streamdock-n3-probe`、`streamdock-n3-debug` 和遗留安装命令。它们属于上游遗留，仅为延续兼容而保留，**不属于已验证的 N3 AI Deck 路径**；不要把它们用于已验证的 `6602:1000` 流程（见 M1 章节）。
+
 ## 当前状态
 
 | 硬件 | USB ID | 状态 |
@@ -27,7 +47,7 @@
 
 当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构的主动设备边界（适配层、vendor 后端与机主运行的实时派发）已实现并通过真机验证（M2–M4）。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；daemon 后台接线仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
 
-> **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称。继承的 `0.2.5` 只表示上游版本脉络，并非 N3 AI Deck 的发布版本；命名和版本方案将在 `v0.1.0` 之前解决。
+> **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称，并标注为上游遗留。命名和版本方案已在 v0.1.0 中解决：分发包版本现为 `0.1.0`，继承的 `0.2.5` 版本脉络（并非 N3 AI Deck 的发布版本）记录在 CHANGELOG 中。
 
 ## 安全只读发现（M1）
 
