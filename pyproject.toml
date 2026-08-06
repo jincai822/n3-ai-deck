@@ -82,6 +82,7 @@ include = [
     "CONTRIBUTING.md",
     "ACKNOWLEDGEMENTS.md",
     "docs/ARCHITECTURE.md",
+    "docs/validation/physical-validation-checklist.md",
     "CHANGELOG.md",
     "LICENSE",
     "Makefile",
