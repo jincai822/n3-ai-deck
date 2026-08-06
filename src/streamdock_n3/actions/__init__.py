@@ -27,6 +27,13 @@ from streamdock_n3.actions.contracts import (
     PluginMetadata,
 )
 from streamdock_n3.actions.engine import DEFAULT_TIMEOUT_SECONDS, ActionEngine, event_key_for
+from streamdock_n3.actions.feedback import (
+    KEY_IMAGE_SIZE,
+    STATE_COLORS,
+    FeedbackState,
+    render_state_image,
+    write_key_image,
+)
 from streamdock_n3.actions.live import (
     LiveSessionResult,
     LiveSessionSpec,
@@ -49,15 +56,20 @@ __all__ = [
     "ActionStatus",
     "AiTextPlugin",
     "BindingsError",
+    "FeedbackState",
+    "KEY_IMAGE_SIZE",
     "LaunchAppPlugin",
     "LiveSessionResult",
     "LiveSessionSpec",
     "LiveSessionStatus",
     "LogEventPlugin",
     "PluginMetadata",
+    "STATE_COLORS",
     "builtin_registry",
     "default_bindings_path",
     "event_key_for",
     "load_bindings",
+    "render_state_image",
     "run_live_loop",
+    "write_key_image",
 ]

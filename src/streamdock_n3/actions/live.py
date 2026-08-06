@@ -8,10 +8,16 @@ dispatches each normalized event to an ActionEngine. A backend OSError ends
 the session as a disconnect; engine and plugin failures never crash the loop.
 Both the input backend and the vendor transport are injectable so tests never
 touch real nodes.
+
+P3 of the M4 design (section 4.5) adds two optional, exception-guarded
+callbacks: `on_dispatch_start(event)` fires immediately before the engine
+call ("running"), and `on_event(event, result)` fires after it; a raising
+callback is suppressed so it can never abort the session.
 """
 
 from __future__ import annotations
 
+import contextlib
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -128,6 +134,7 @@ def run_live_loop(
     input_backend: ReadOnlyInputBackend,
     transport: VendorHidTransport,
     on_event: Callable[[NormalizedInputEvent, ActionResult | None], None] | None = None,
+    on_dispatch_start: Callable[[NormalizedInputEvent], None] | None = None,
 ) -> LiveSessionResult:
     """Run one bounded live session and return its structured result."""
     if not isinstance(spec, LiveSessionSpec):
@@ -140,6 +147,8 @@ def run_live_loop(
         raise TypeError("engine must be an ActionEngine")
     if on_event is not None and not callable(on_event):
         raise TypeError("on_event must be callable")
+    if on_dispatch_start is not None and not callable(on_dispatch_start):
+        raise TypeError("on_dispatch_start must be callable")
 
     init_ok = True
     if spec.init:
@@ -174,9 +183,13 @@ def run_live_loop(
                         unknown += 1
                         continue
                     dispatched += 1
+                    if on_dispatch_start is not None:
+                        with contextlib.suppress(Exception):
+                            on_dispatch_start(normalized)
                     result = _dispatch(engine, normalized)
                     if on_event is not None:
-                        on_event(normalized, result)
+                        with contextlib.suppress(Exception):
+                            on_event(normalized, result)
             except OSError:
                 disconnected = True
                 break

@@ -557,3 +557,119 @@ def test_run_live_loop_rejects_invalid_arguments() -> None:
             input_backend=backend,
             transport=transport,
         )
+
+
+def test_on_dispatch_start_fires_before_result_for_normalized_events_only() -> None:
+    backend = ScriptedInputBackend((_raw(0x25), _raw(0x99), _raw(0x30)))
+    transport = RecordingTransport()
+    bindings = {"button.1.press": ActionBinding("button.1.press", "ok", {})}
+    engine = ActionEngine({"ok": _OkPlugin()}, bindings)
+    order: list[str] = []
+
+    result = run_live_loop(
+        LiveSessionSpec(duration_ms=20, init=False),
+        _NODE,
+        _key_map(),
+        engine,
+        input_backend=backend,
+        transport=transport,
+        on_event=lambda event, action_result: order.append("result"),
+        on_dispatch_start=lambda event: order.append("start"),
+    )
+
+    assert result.status is LiveSessionStatus.SUCCEEDED
+    assert result.events == 3
+    assert result.unknown == 1
+    assert result.dispatched == 2
+    # The unknown raw code (0x99) never normalizes, so it triggers neither hook.
+    assert order == ["start", "result", "start", "result"]
+
+
+def test_raising_on_event_does_not_crash_the_loop() -> None:
+    backend = ScriptedInputBackend((_raw(0x25), _raw(0x25)))
+    transport = RecordingTransport()
+    bindings = {"button.1.press": ActionBinding("button.1.press", "ok", {})}
+    engine = ActionEngine({"ok": _OkPlugin()}, bindings)
+
+    def boom(event: NormalizedInputEvent, action_result: ActionResult | None) -> None:
+        raise RuntimeError("callback boom")
+
+    result = run_live_loop(
+        LiveSessionSpec(duration_ms=20, init=False),
+        _NODE,
+        _key_map(),
+        engine,
+        input_backend=backend,
+        transport=transport,
+        on_event=boom,
+    )
+
+    assert result.status is LiveSessionStatus.SUCCEEDED
+    assert result.events == 2
+    assert result.dispatched == 2
+    assert result.disconnected is False
+
+
+def test_raising_on_dispatch_start_does_not_crash_the_loop() -> None:
+    backend = ScriptedInputBackend((_raw(0x25), _raw(0x25)))
+    transport = RecordingTransport()
+    bindings = {"button.1.press": ActionBinding("button.1.press", "ok", {})}
+    engine = ActionEngine({"ok": _OkPlugin()}, bindings)
+    recorder = _Recorder()
+
+    def boom(event: NormalizedInputEvent) -> None:
+        raise RuntimeError("callback boom")
+
+    result = run_live_loop(
+        LiveSessionSpec(duration_ms=20, init=False),
+        _NODE,
+        _key_map(),
+        engine,
+        input_backend=backend,
+        transport=transport,
+        on_event=recorder,
+        on_dispatch_start=boom,
+    )
+
+    assert result.status is LiveSessionStatus.SUCCEEDED
+    assert result.dispatched == 2
+    # Dispatch and the result callback still run after the raising start hook.
+    assert len(recorder.calls) == 2
+    for _, action_result in recorder.calls:
+        assert action_result is not None
+        assert action_result.status is ActionStatus.OK
+
+
+def test_old_signature_without_new_hooks_still_works() -> None:
+    backend = ScriptedInputBackend((_raw(0x25),))
+    transport = RecordingTransport()
+    engine = ActionEngine({}, {})
+    recorder = _Recorder()
+
+    result = run_live_loop(
+        LiveSessionSpec(duration_ms=20, init=False),
+        _NODE,
+        _key_map(),
+        engine,
+        input_backend=backend,
+        transport=transport,
+        on_event=recorder,
+    )
+
+    assert result.status is LiveSessionStatus.SUCCEEDED
+    assert result.dispatched == 1
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0][1] is None  # unbound: no result
+
+
+def test_run_live_loop_rejects_invalid_on_dispatch_start() -> None:
+    with pytest.raises(TypeError):
+        run_live_loop(
+            LiveSessionSpec(duration_ms=20),
+            _NODE,
+            _key_map(),
+            ActionEngine({}, {}),
+            input_backend=ScriptedInputBackend(),
+            transport=RecordingTransport(),
+            on_dispatch_start=42,  # type: ignore[arg-type]
+        )
