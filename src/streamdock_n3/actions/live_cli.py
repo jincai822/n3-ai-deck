@@ -7,23 +7,35 @@ launching allowlisted apps when the owner has created a bindings file. Output
 is one JSONL line per dispatched event plus a final summary; the session ends
 cleanly on deadline, Ctrl+C, or disconnect. Never daemonizes, never writes
 config, and never exposes device node paths in output.
+
+P4 of the M4 design (section 4.7 of
+docs/superpowers/specs/2026-08-05-m4-ai-workflow-design.md) adds optional LCD
+state feedback (`--feedback`) and a per-action engine timeout
+(`--timeout-seconds`).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 from streamdock_n3.actions.builtins import builtin_registry
 from streamdock_n3.actions.config import BindingsError, default_bindings_path, load_bindings
-from streamdock_n3.actions.contracts import ActionBinding, ActionResult
-from streamdock_n3.actions.engine import ActionEngine, event_key_for
+from streamdock_n3.actions.contracts import ActionBinding, ActionResult, ActionStatus
+from streamdock_n3.actions.engine import (
+    DEFAULT_TIMEOUT_SECONDS,
+    ActionEngine,
+    event_key_for,
+)
+from streamdock_n3.actions.feedback import FeedbackState, render_state_image, write_key_image
 from streamdock_n3.actions.live import LiveSessionSpec, LiveSessionStatus, run_live_loop
 from streamdock_n3.hardware.contracts import (
     MAX_DEADLINE_MS,
+    InputKind,
     KeyMap,
     NormalizedInputEvent,
 )
@@ -34,6 +46,13 @@ from streamdock_n3.paths import config_dir
 
 SCHEMA_VERSION = 1
 DEFAULT_DURATION_MS = 60_000
+_LCD_KEY_COUNT = 6
+
+_STATUS_FEEDBACK: dict[ActionStatus, FeedbackState] = {
+    ActionStatus.OK: FeedbackState.SUCCESS,
+    ActionStatus.ERROR: FeedbackState.FAILURE,
+    ActionStatus.TIMEOUT: FeedbackState.TIMEOUT,
+}
 
 
 def _resolve_bindings_path(explicit: Path | None) -> tuple[Path, str]:
@@ -78,6 +97,70 @@ def _render_event_line(
 
 def _print_event_line(event: NormalizedInputEvent, result: ActionResult | None) -> None:
     print(json.dumps(_render_event_line(event, result), ensure_ascii=True))
+
+
+def _targets_lcd_key(event: NormalizedInputEvent) -> bool:
+    """Buttons on LCD keys (control ids 1..6) have a screen; knobs do not."""
+    return event.kind is InputKind.BUTTON and 1 <= event.control_id <= _LCD_KEY_COUNT
+
+
+def _write_state(
+    node: str,
+    transport: _HidrawTransport,
+    key: int,
+    state: FeedbackState,
+    text: str | None = None,
+) -> None:
+    """Best-effort LCD write; a render or transport failure is ignored."""
+    with contextlib.suppress(Exception):
+        jpeg = render_state_image(state, text)
+        write_key_image(node, key, jpeg, transport)
+
+
+def _feedback_callbacks(
+    node: str,
+) -> tuple[
+    Callable[[NormalizedInputEvent], None],
+    Callable[[NormalizedInputEvent, ActionResult | None], None],
+]:
+    """Build the LCD feedback callbacks wired to the real hidraw transport.
+
+    `on_dispatch_start` writes the yellow RUNNING image to the triggering LCD
+    key before the engine call; `on_event` writes green SUCCESS / red FAILURE /
+    orange TIMEOUT per the ActionResult status. Knobs and round buttons have
+    no screen and are skipped silently; unbound and skipped results write
+    nothing. Feedback failures never raise and never affect the loop or the
+    exit code.
+    """
+    transport = _HidrawTransport()
+
+    def on_dispatch_start(event: NormalizedInputEvent) -> None:
+        if not _targets_lcd_key(event):
+            return
+        _write_state(node, transport, event.control_id, FeedbackState.RUNNING)
+
+    def on_event(event: NormalizedInputEvent, result: ActionResult | None) -> None:
+        if not _targets_lcd_key(event) or result is None:
+            return
+        state = _STATUS_FEEDBACK.get(result.status)
+        if state is None:
+            return  # skipped: no write
+        text = result.detail if result.status is ActionStatus.OK else None
+        _write_state(node, transport, event.control_id, state, text)
+
+    return on_dispatch_start, on_event
+
+
+def _compose_event_callback(
+    feedback_event: Callable[[NormalizedInputEvent, ActionResult | None], None],
+) -> Callable[[NormalizedInputEvent, ActionResult | None], None]:
+    """Print the JSONL event line and then apply LCD feedback."""
+
+    def on_event(event: NormalizedInputEvent, result: ActionResult | None) -> None:
+        _print_event_line(event, result)
+        feedback_event(event, result)
+
+    return on_event
 
 
 def _dry_run_summary(
@@ -140,6 +223,21 @@ def build_parser() -> argparse.ArgumentParser:
             "without opening the device"
         ),
     )
+    parser.add_argument(
+        "--feedback",
+        action="store_true",
+        help=(
+            "write LCD state images (running/success/failure/timeout) to the "
+            "triggering LCD key"
+        ),
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+        help=f"per-action engine timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS:g})",
+    )
     return parser
 
 
@@ -159,6 +257,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     explicit_bindings = cast(Path | None, args.bindings)
     no_init = cast(bool, args.no_init)
     dry_run = cast(bool, args.dry_run)
+    feedback = cast(bool, args.feedback)
+    timeout_seconds = cast(float, args.timeout_seconds)
+    if not timeout_seconds > 0:
+        return _emit_error("--timeout-seconds must be a positive number")
 
     try:
         bindings_path, bindings_source = _resolve_bindings_path(explicit_bindings)
@@ -179,7 +281,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    engine = ActionEngine(builtin_registry(), bindings)
+    engine = ActionEngine(builtin_registry(), bindings, timeout_seconds=timeout_seconds)
+    on_event: Callable[[NormalizedInputEvent, ActionResult | None], None] = _print_event_line
+    on_dispatch_start: Callable[[NormalizedInputEvent], None] | None = None
+    if feedback:
+        feedback_start, feedback_event = _feedback_callbacks(node)
+        on_dispatch_start = feedback_start
+        on_event = _compose_event_callback(feedback_event)
     try:
         result = run_live_loop(
             spec,
@@ -188,7 +296,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             engine,
             input_backend=VendorHidReadOnlyBackend(),
             transport=_HidrawTransport(),
-            on_event=_print_event_line,
+            on_event=on_event,
+            on_dispatch_start=on_dispatch_start,
         )
     except KeyboardInterrupt:
         print(

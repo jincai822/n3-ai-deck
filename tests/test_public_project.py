@@ -352,6 +352,44 @@ def test_public_docs_describe_live_dispatch() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
+def test_public_docs_describe_m4_ai_workflow() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "N3_AI_DECK_API_KEY",
+        "--feedback",
+        "--timeout-seconds",
+        "ai_text",
+    ):
+        assert required in english
+        assert required in chinese
+
+    for required in (
+        "N3_AI_DECK_API_KEY",
+        "ai_text",
+        "--feedback",
+        "G7-validated BAT",
+    ):
+        assert required in architecture
+
+    for required in (
+        "- [x] Owner-run AI workflow",
+        "docs/superpowers/specs/2026-08-05-m4-ai-workflow-design.md",
+        "owner:2026-08-05:m4-ai-workflow",
+    ):
+        assert required in roadmap
+
+    for text in (english, chinese, architecture, roadmap):
+        for line in text.splitlines():
+            assert "N3_AI_DECK_API_KEY=" not in line, f"credential value leaked: {line}"
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english

@@ -72,6 +72,20 @@ uv run n3-ai-deck-live --duration-ms 60000
 uv run n3-ai-deck-live --dry-run
 ```
 
+## AI 工作流（M4）
+
+M4 把真实 AI 工作流接入设备：按下 LCD 按键会读取当前剪贴板，通过 OpenAI 兼容端点把它总结成一句话，并在按键上显示结果状态——运行中为黄色、成功为绿色、失败为红色、超时为橙色。
+
+```bash
+uv run n3-ai-deck-live --feedback --timeout-seconds 15
+```
+
+凭据由你通过环境变量提供（`N3_AI_DECK_API_KEY`——名称可在绑定中配置，值绝不存入本仓库）；缺少凭据只会禁用 `ai_text` 插件，所有本地动作照常工作。AI 插件不增加任何新运行时依赖——只使用 Python 标准库。无需设备即可预览解析结果：
+
+```bash
+uv run n3-ai-deck-live --feedback --timeout-seconds 15 --dry-run
+```
+
 ## 规划中的执行链路
 
 ```text

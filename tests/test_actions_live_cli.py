@@ -8,6 +8,7 @@ import pytest
 
 from streamdock_n3.actions.contracts import ActionResult, ActionStatus
 from streamdock_n3.actions.engine import ActionEngine
+from streamdock_n3.actions.feedback import FeedbackState
 from streamdock_n3.actions.live import (
     LiveSessionResult,
     LiveSessionSpec,
@@ -66,6 +67,7 @@ class ScriptedLoop:
         input_backend: Any,
         transport: Any,
         on_event: Any,
+        on_dispatch_start: Any = None,
     ) -> LiveSessionResult:
         self.kwargs = {
             "spec": spec,
@@ -74,8 +76,11 @@ class ScriptedLoop:
             "engine": engine,
             "input_backend": input_backend,
             "transport": transport,
+            "on_dispatch_start": on_dispatch_start,
         }
         for event, result in self.events:
+            if on_dispatch_start is not None:
+                on_dispatch_start(event)
             on_event(event, result)
         return self.result
 
@@ -92,11 +97,15 @@ def test_parser_exposes_live_flags() -> None:
     assert "--duration-ms" in actions
     assert "--no-init" in actions
     assert "--dry-run" in actions
+    assert "--feedback" in actions
+    assert "--timeout-seconds" in actions
     args = parser.parse_args([])
     assert args.bindings is None
     assert args.duration_ms == 60_000
     assert args.no_init is False
     assert args.dry_run is False
+    assert args.feedback is False
+    assert args.timeout_seconds == 5.0
 
 
 def test_dry_run_with_shipped_sample(
@@ -313,3 +322,205 @@ def test_node_resolution_failure_exits_1(
     rendered = json.loads(out)
     assert rendered["status"] == "error"
     assert "no node" in rendered["detail"]
+
+
+@pytest.mark.parametrize("timeout_seconds", ("0", "-1", "0.0", "nan"))
+def test_timeout_seconds_non_positive_is_rejected(
+    timeout_seconds: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, out = _run(["--timeout-seconds", timeout_seconds, "--dry-run"], capsys)
+
+    assert code == 1
+    rendered = json.loads(out)
+    assert rendered["status"] == "error"
+    assert "positive" in rendered["detail"]
+
+
+def test_timeout_seconds_plumbed_into_the_engine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bindings = _write_bindings(tmp_path, _bindings_payload())
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    loop = ScriptedLoop(
+        [],
+        LiveSessionResult(LiveSessionStatus.SUCCEEDED, 0, 0, 0, False, True, 0),
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.run_live_loop", loop)
+
+    code, out = _run(
+        ["--timeout-seconds", "15", "--bindings", str(bindings)], capsys
+    )
+
+    assert code == 0
+    assert loop.kwargs["engine"]._timeout_seconds == 15.0
+
+    code, out = _run(["--bindings", str(bindings)], capsys)
+
+    assert code == 0
+    assert loop.kwargs["engine"]._timeout_seconds == 5.0
+
+
+def test_dry_run_accepts_feedback_and_timeout_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.config_dir", lambda: tmp_path)
+
+    code, out = _run(["--dry-run", "--feedback", "--timeout-seconds", "12.5"], capsys)
+
+    assert code == 0
+    rendered = json.loads(out)
+    assert rendered["status"] == "ok"
+    assert rendered["bindings_source"] == "shipped"
+
+
+class _FeedbackRecorder:
+    """Records render_state_image/write_key_image calls; never opens devices."""
+
+    def __init__(self) -> None:
+        self.rendered: list[tuple[object, str | None]] = []
+        self.written: list[tuple[str, int, bytes]] = []
+        self.render_raises = False
+        self.write_returns = True
+
+    def render(self, state: object, text: str | None = None) -> bytes:
+        if self.render_raises:
+            raise RuntimeError("render boom")
+        self.rendered.append((state, text))
+        return b"\xff\xd8fake-jpeg"
+
+    def write(self, node: str, key: int, jpeg: bytes, transport: Any = None) -> bool:
+        del transport
+        self.written.append((node, key, jpeg))
+        return self.write_returns
+
+
+def test_feedback_wires_callbacks_and_maps_status_to_colors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bindings = _write_bindings(tmp_path, _bindings_payload())
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    events: list[tuple[NormalizedInputEvent, ActionResult | None]] = [
+        (_button_event(), ActionResult(ActionStatus.OK, "log_event", "logged", 1)),
+        (
+            _button_event(),
+            ActionResult(ActionStatus.ERROR, "ai_text", "ai: request failed", 2),
+        ),
+        (
+            _button_event(),
+            ActionResult(ActionStatus.TIMEOUT, "ai_text", "request timed out", 3),
+        ),
+        (
+            _button_event(),
+            ActionResult(ActionStatus.SKIPPED, "launch_app", "skipped", 0),
+        ),
+        (_button_event(), None),  # unbound
+        (
+            NormalizedInputEvent(InputKind.KNOB_ROTATE, 1, InputAction.LEFT, 6_000),
+            ActionResult(ActionStatus.OK, "log_event", "logged", 1),
+        ),
+    ]
+    loop = ScriptedLoop(
+        events,
+        LiveSessionResult(LiveSessionStatus.SUCCEEDED, 6, 5, 0, False, True, 9),
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.run_live_loop", loop)
+    recorder = _FeedbackRecorder()
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.render_state_image", recorder.render
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.write_key_image", recorder.write)
+
+    code, out = _run(["--feedback", "--bindings", str(bindings)], capsys)
+
+    assert code == 0
+    assert loop.kwargs["on_dispatch_start"] is not None
+    # RUNNING precedes the result image for the first button event.
+    assert recorder.rendered[0] == (FeedbackState.RUNNING, None)
+    assert recorder.rendered[1] == (FeedbackState.SUCCESS, "logged")
+    # ok -> SUCCESS (with detail text), error -> FAILURE, timeout -> TIMEOUT.
+    assert (FeedbackState.FAILURE, None) in recorder.rendered
+    assert (FeedbackState.TIMEOUT, None) in recorder.rendered
+    # 5 button events -> 5 RUNNING renders, then ok/error/timeout -> 3 more.
+    # skipped and unbound write nothing; the knob event is skipped silently.
+    assert recorder.rendered.count((FeedbackState.RUNNING, None)) == 5
+    assert len(recorder.rendered) == 8
+    assert len(recorder.written) == 8
+    assert all(node == "vendor-node" and key == 1 for node, key, _ in recorder.written)
+    # the JSONL event lines and summary are still printed alongside feedback.
+    lines = out.splitlines()
+    assert len(lines) == 7
+    assert json.loads(lines[-1])["status"] == "succeeded"
+
+
+def test_feedback_render_failure_is_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bindings = _write_bindings(tmp_path, _bindings_payload())
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    loop = ScriptedLoop(
+        [(_button_event(), ActionResult(ActionStatus.OK, "log_event", "logged", 1))],
+        LiveSessionResult(LiveSessionStatus.SUCCEEDED, 1, 1, 0, False, True, 1),
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.run_live_loop", loop)
+    recorder = _FeedbackRecorder()
+    recorder.render_raises = True
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.render_state_image", recorder.render
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.write_key_image", recorder.write)
+
+    code, out = _run(["--feedback", "--bindings", str(bindings)], capsys)
+
+    assert code == 0
+    lines = out.splitlines()
+    assert len(lines) == 2  # event line and summary are still emitted
+    assert json.loads(lines[0])["status"] == "ok"
+    assert len(recorder.written) == 0
+
+
+def test_feedback_write_failure_is_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    bindings = _write_bindings(tmp_path, _bindings_payload())
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    loop = ScriptedLoop(
+        [(_button_event(), ActionResult(ActionStatus.OK, "log_event", "logged", 1))],
+        LiveSessionResult(LiveSessionStatus.SUCCEEDED, 1, 1, 0, False, True, 1),
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.run_live_loop", loop)
+    recorder = _FeedbackRecorder()
+    recorder.write_returns = False
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.render_state_image", recorder.render
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.write_key_image", recorder.write)
+
+    code, out = _run(["--feedback", "--bindings", str(bindings)], capsys)
+
+    assert code == 0
+    assert len(recorder.rendered) == 2  # RUNNING and SUCCESS were still rendered
+    assert len(recorder.written) == 2  # both writes attempted, both returned False
+    lines = out.splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[-1])["status"] == "succeeded"

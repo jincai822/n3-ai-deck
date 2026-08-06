@@ -79,6 +79,21 @@ engine and plugin failures never crash the session. Allowlisted app launches
 require an owner-created bindings file. Background daemonization, systemd or
 supervisor-managed auto-restart, and auto-reconnect remain planned (G8).
 
+### AI workflow and LCD state feedback
+
+M4 wires a real AI workflow to the engine: the `ai_text` plugin reads the X11
+clipboard with a fixed argv (no shell) and calls an OpenAI-compatible
+`/chat/completions` endpoint to summarize it into one sentence, using only the
+Python standard library with no new runtime dependencies. The API key is read
+from an environment variable (`N3_AI_DECK_API_KEY`, overridable per binding)
+and is never logged, rendered on an LCD image, or committed; a missing
+credential degrades only the `ai_text` plugin. The owner-run live CLI gained
+`--feedback`, which writes per-key LCD state images (yellow running / green
+success / red failure / orange timeout) through the G7-validated BAT frame
+pipeline as best-effort writes that never affect the session, and
+`--timeout-seconds` to bound each engine execution. Background daemonization
+and daemon-managed wiring remain planned (G8).
+
 ### Local UI and diagnostics
 
 The planned responsibility is to show device/action state and separate read-only discovery from hardware writes. The implemented M1 `discovery.py` command reads only allowlisted sysfs metadata and can report multiple HID candidates without choosing an interface.

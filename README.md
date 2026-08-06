@@ -86,6 +86,28 @@ opening the device:
 uv run n3-ai-deck-live --dry-run
 ```
 
+## AI workflow (M4)
+
+M4 wires a real AI workflow to the device: pressing an LCD key reads the
+current clipboard, summarizes it into one sentence through an
+OpenAI-compatible endpoint, and shows the outcome on the key — yellow while
+running, green on success, red on failure, orange on timeout.
+
+```bash
+uv run n3-ai-deck-live --feedback --timeout-seconds 15
+```
+
+Credentials are provided by you through an environment variable
+(`N3_AI_DECK_API_KEY` — the name is configurable per binding, the value is
+never stored in this repository); a missing credential disables only the
+`ai_text` plugin and every local action keeps working. The AI plugin adds no
+new runtime dependencies — it uses the Python standard library. Preview the
+resolved setup without a device:
+
+```bash
+uv run n3-ai-deck-live --feedback --timeout-seconds 15 --dry-run
+```
+
 ## Planned flow
 
 ```text

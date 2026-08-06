@@ -103,7 +103,16 @@ snapshots are validation context, not state authority.
 
 ## M4 — AI workflow demonstration
 
-- Record one useful end-to-end AI workflow with visible device feedback and local credentials.
+**Status:** In progress — AI workflow plugin, LCD state feedback, and the live CLI flags complete; golden 10/10 on-hardware validation pending (P5)
+
+- [x] Owner-run AI workflow with visible device feedback and local credentials. Evidence:
+  [the M4 AI workflow design](docs/superpowers/specs/2026-08-05-m4-ai-workflow-design.md),
+  approval reference `owner:2026-08-05:m4-ai-workflow`. `n3-ai-deck-live
+  --feedback` renders running/success/failure/timeout states on the LCD keys
+  while the `ai_text` plugin summarizes the clipboard through an
+  OpenAI-compatible endpoint with an environment-variable credential. The
+  golden 10/10 measurement run is recorded by the P5 on-hardware validation
+  record, appended to this item when it lands.
 
 ## M5 — v0.1.0
 
