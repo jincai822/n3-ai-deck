@@ -1,6 +1,6 @@
 # Architecture
 
-N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1, and the hardware-free G0 simulation foundation is implemented in M2. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active hardware stages G1–G7 remain planned M2 work. Everything below distinguishes those implemented M1/G0 boundaries from the planned target architecture.
+N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1, and the hardware-free G0 simulation foundation is implemented in M2. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active hardware stages G1–G7 were implemented and validated on the owner's `6602:1000` unit during M2; daemon-managed background wiring (G8), GUI configuration, and entry-point discovery remain planned. Everything below distinguishes those implemented M1/G0 boundaries from the planned target architecture.
 
 ## G0 implemented safety boundary
 
@@ -32,7 +32,7 @@ G1 chooses and approves an exact active profile and interface responsibility; G2
 
 ## G1 implemented safety boundary
 
-G1 approves an exact candidate active profile and resolves interface responsibility from passive sysfs evidence only; it never opens `/dev` or loads the SDK. A pure role classifier maps boot-keyboard and input-subsystem interfaces to `INPUT`, and vendor-HID interfaces without an input association to `CONTROL`; any ambiguity, incomplete evidence, or later identity/interface/role drift fails closed at the gate. The approved profile and roles are pinned at G1 commit and every later stage must match exactly. Approved roles are approved candidate roles pending G3 physical validation: `6602:1000` remains a candidate with unvalidated protocol, and no compatibility claim is made.
+G1 approves an exact candidate active profile and resolves interface responsibility from passive sysfs evidence only; it never opens `/dev` or loads the SDK. A pure role classifier maps boot-keyboard and input-subsystem interfaces to `INPUT`, and vendor-HID interfaces without an input association to `CONTROL`; any ambiguity, incomplete evidence, or later identity/interface/role drift fails closed at the gate. The approved profile and roles are pinned at G1 commit and every later stage must match exactly. The approved profile and roles were hardware-validated in the G3 input observation session (dated evidence in `docs/validation/`). `6602:1000` remains an owner-reported candidate whose identity is not independently confirmed, and no compatibility claim is made.
 
 ## G2 implemented offline permission boundary
 

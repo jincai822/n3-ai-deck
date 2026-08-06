@@ -8,7 +8,7 @@
 
 **N3 AI Deck 是面向 Linux 和妙联宝/Mirabox N3 V3.0 的开源、本地优先 AI 生产力控制台。** 项目目标是把六个 LCD 按键、三个圆形按键和三个旋钮变成可视、可重复的 AI 与桌面自动化工作流入口。
 
-> **Early Preview：** `6602:1000` 是机主报告为 N3 V3.0 的 USB ID 候选。其物理型号身份未确认，协议兼容性、初始化、输入控件、亮度和 LCD 写入尚未完成真机验证。现在不要把该分支作为设备驱动安装。
+> **Early Preview：** `6602:1000` 是机主报告为 N3 V3.0 的 USB ID 候选，其物理型号身份未独立确认。协议兼容性、初始化、输入控件、亮度和 LCD 写入已在机主的 `6602:1000` 设备上完成真机验证（带日期的验证记录见 `docs/validation/`）。daemon 后台接线（G8）、GUI 配置与入口点发现仍属规划；在 `v0.1.0` 之前不要把该分支作为生产设备驱动使用。
 
 ## 可以用来做什么
 
@@ -22,10 +22,10 @@
 
 | 硬件 | USB ID | 状态 |
 |---|---:|---|
-| 机主报告的 N3 V3.0 候选 | `6602:1000` | USB ID 候选；身份未确认；协议与写入操作尚未验证 |
+| 机主报告的 N3 V3.0 候选 | `6602:1000` | USB ID 候选；身份未独立确认；协议、初始化、输入控件、亮度与 LCD 写入已在机主的 `6602:1000` 设备上验证 |
 | FHOOU/Mirabox N3 参考型号 | `6603:1003` | 上游已支持，等待 N3 AI Deck 重新验证 |
 
-当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构仍计划增加主动设备边界。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；daemon 后台接线仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
+当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构的主动设备边界（适配层、vendor 后端与机主运行的实时派发）已实现并通过真机验证（M2–M4）。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；daemon 后台接线仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
 
 > **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称。继承的 `0.2.5` 只表示上游版本脉络，并非 N3 AI Deck 的发布版本；命名和版本方案将在 `v0.1.0` 之前解决。
 
@@ -42,7 +42,7 @@ uv run n3-ai-deck-detect --json
 
 继承的 daemon、probe、debug、GUI 和 install 命令不在 M1 的只读保证范围内，M1 中不得用于 `6602:1000`。这包括 `streamdock-n3`、`streamdock-n3-probe`、`streamdock-n3-debug`、`streamdock-n3-gui` 和 `streamdock-n3-install`。
 
-G1 在被动发现之上解决接口职责：同一 sysfs-only 命令现在为每个 HID 接口报告角色（`input` / `control` / `unknown`）及其脱敏证据依据，并给出 `interface_selection`（`resolved` / `ambiguous` / `none`）。已解析的候选 profile 及其角色通过 `N3Adapter` 的 G1 门显式批准；批准是候选 profile 决定，不是兼容性声明。角色在 G3 真机物理验证前仍是已批准的候选角色，`6602:1000` 仍是协议未验证的候选。
+G1 在被动发现之上解决接口职责：同一 sysfs-only 命令现在为每个 HID 接口报告角色（`input` / `control` / `unknown`）及其脱敏证据依据，并给出 `interface_selection`（`resolved` / `ambiguous` / `none`）。已解析的候选 profile 及其角色通过 `N3Adapter` 的 G1 门显式批准；批准是候选 profile 决定，不是兼容性声明。角色已在机主的 `6602:1000` 设备上通过 G3 输入观测会话完成真机验证；`6602:1000` 仍是机主报告的候选，其身份未独立确认。
 
 G2 完全离线设计权限且不授予任何权限：仅生成临时单节点 ACL 计划（仅占位符）和精确匹配 `6602:1000` 的 `TAG+="uaccess"` udev 规则模板，以及只针对显式非系统 root 的安装事务。未授予任何权限、未写任何系统文件、未执行任何权限命令；任何真实的 ACL 或 udev 安装仍是独立的人工操作。
 

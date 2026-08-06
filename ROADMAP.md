@@ -37,7 +37,7 @@ G3's read-only input observation is defined in
 
 ## M2 — Hardware controls
 
-**Status:** In progress — G0 foundation and G1 candidate profile approval complete
+**Status:** Complete — G0 foundation, G1 candidate profile approval, and the hardware-validated G2–G7 stages
 
 G0 is a hardware-free transactional simulation foundation. It proves ordered private
 reservations, exactly-once fake backend attempts, redacted evidence acceptance, settlement,
@@ -82,7 +82,7 @@ snapshots are validation context, not state authority.
 
 ## M3 — Extensible action engine
 
-**Status:** In progress — plugin contract, safe builtins, demo CLI, and owner-run live dispatch CLI complete
+**Status:** Complete — plugin contract, safe builtins, demo CLI, owner-run live dispatch CLI, and on-hardware validation
 
 - [x] Publish the plugin contract and safe local example actions. Evidence:
   [the M3 action engine design](docs/superpowers/specs/2026-08-05-m3-action-engine-design.md)

@@ -69,8 +69,8 @@ def test_bilingual_readmes_are_honest_early_preview_pages() -> None:
         assert "curl -fsSL" not in text
     assert "README.zh-CN.md" in english
     assert "README.md" in chinese
-    assert "not yet validated" in english
-    assert "尚未完成真机验证" in chinese
+    assert "validated on the owner's `6602:1000` unit" in english
+    assert "已在机主的 `6602:1000` 设备上完成真机验证" in chinese
 
 
 def test_readmes_publish_m1_read_only_discovery_boundary() -> None:
@@ -86,7 +86,7 @@ def test_readmes_publish_m1_read_only_discovery_boundary() -> None:
 
     for required in (
         "candidate",
-        "identity not confirmed",
+        "identity not independently confirmed",
         "sysfs",
         "daemon, probe, debug, GUI, and install",
         "outside M1's read-only guarantee",
@@ -120,7 +120,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "passive",
         "active",
         "implemented in M1",
-        "planned M2 work",
+        "implemented and validated on the owner's `6602:1000` unit during M2",
         "not ProductIDs.g_products",
     ):
         assert required in architecture
@@ -137,7 +137,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "G1",
         "G7",
         "hardware-free G0 simulation foundation is implemented",
-        "active hardware stages G1–G7 remain planned M2 work",
+        "The active hardware stages G1–G7 were implemented and validated on the owner's `6602:1000` unit during M2",
     ):
         assert required in architecture
 
@@ -163,7 +163,7 @@ def test_architecture_documents_m1_passive_and_m2_g0_boundaries() -> None:
         "docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md",
         "docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md",
         "docs/superpowers/plans/2026-08-03-m2-g0-transactional-adapter-safety-hardening.md",
-        "**Status:** In progress — G0 foundation and G1 candidate profile approval complete",
+        "**Status:** Complete — G0 foundation, G1 candidate profile approval, and the hardware-validated G2–G7 stages",
         "hardware-free transactional simulation foundation",
         "- [x] Define and test the hardware-free Adapter contracts",
         "- [x] G1: approve an exact active profile",
@@ -194,12 +194,12 @@ def test_public_docs_describe_g1_candidate_profile_approval() -> None:
         "interface responsibility",
         "candidate profile",
         "passive",
-        "G3 physical validation",
+        "G3 input observation session",
     ):
         assert required in "\n".join((english, architecture))
 
-    assert "approved candidate roles" in architecture
-    assert "pending G3 physical validation" in architecture
+    assert "hardware-validated in the G3 input observation session" in architecture
+    assert "remains an owner-reported candidate whose identity is not independently confirmed" in architecture
     assert "role classifier" in architecture
     assert "docs/superpowers/plans/2026-08-04-m2-g1-profile-approval.md" in roadmap
 
