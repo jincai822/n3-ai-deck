@@ -1,5 +1,12 @@
 """M3 action engine: plugin contract, timeout-enforcing engine, and safe builtins."""
 
+from streamdock_n3.actions.ai import (
+    DEFAULT_API_KEY_ENV,
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DEFAULT_PROMPT,
+    AiTextPlugin,
+)
 from streamdock_n3.actions.builtins import (
     ALLOWLISTED_EXECUTABLES,
     LaunchAppPlugin,
@@ -29,6 +36,10 @@ from streamdock_n3.actions.live import (
 
 __all__ = [
     "ALLOWLISTED_EXECUTABLES",
+    "DEFAULT_API_KEY_ENV",
+    "DEFAULT_BASE_URL",
+    "DEFAULT_MODEL",
+    "DEFAULT_PROMPT",
     "DEFAULT_TIMEOUT_SECONDS",
     "ActionBinding",
     "ActionContext",
@@ -36,6 +47,7 @@ __all__ = [
     "ActionPlugin",
     "ActionResult",
     "ActionStatus",
+    "AiTextPlugin",
     "BindingsError",
     "LaunchAppPlugin",
     "LiveSessionResult",

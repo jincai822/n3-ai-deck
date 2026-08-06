@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from streamdock_n3.actions.ai import AiTextPlugin
 from streamdock_n3.actions.builtins import (
     ALLOWLISTED_EXECUTABLES,
     LaunchAppPlugin,
@@ -184,14 +185,15 @@ def test_log_event_logs_a_structured_line_and_returns_ok(
     }
 
 
-def test_builtin_registry_contains_only_launch_app_and_log_event() -> None:
+def test_builtin_registry_contains_the_builtin_plugins() -> None:
     registry = builtin_registry()
 
-    assert set(registry) == {"launch_app", "log_event"}
+    assert set(registry) == {"ai_text", "launch_app", "log_event"}
     for plugin in registry.values():
         assert isinstance(plugin, ActionPlugin)
     assert isinstance(registry["launch_app"], LaunchAppPlugin)
     assert isinstance(registry["log_event"], LogEventPlugin)
+    assert isinstance(registry["ai_text"], AiTextPlugin)
 
 
 def test_engine_runs_builtin_registry_without_side_effects() -> None:

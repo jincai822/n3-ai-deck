@@ -7,6 +7,7 @@ import logging
 import shutil
 import subprocess
 
+from streamdock_n3.actions.ai import AiTextPlugin
 from streamdock_n3.actions.contracts import (
     ActionContext,
     ActionPlugin,
@@ -100,8 +101,9 @@ class LogEventPlugin:
 
 
 def builtin_registry() -> dict[str, ActionPlugin]:
-    """Return the builtin plugins keyed by name: launch_app and log_event."""
+    """Return the builtin plugins keyed by name: launch_app, log_event, ai_text."""
     return {
         "launch_app": LaunchAppPlugin(),
         "log_event": LogEventPlugin(),
+        "ai_text": AiTextPlugin(),
     }
