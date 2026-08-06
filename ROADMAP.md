@@ -90,8 +90,8 @@ snapshots are validation context, not state authority.
   approval reference `owner:2026-08-05:m3-action-engine`. The engine is
   hardware-free today: contract, safe builtins, JSON bindings, and the
   `n3-ai-deck-run-action` demo CLI. Physical-event wiring is implemented as
-  the owner-run live dispatch CLI below; daemon-managed background wiring
-  remains planned (G8).
+  the owner-run live dispatch CLI below and as the G8 background service
+  (see the G8 line below).
 - [x] Owner-run live dispatch CLI. Evidence:
   [the live dispatch design](docs/superpowers/specs/2026-08-05-live-dispatch-design.md)
   and [the on-hardware validation record](docs/validation/2026-08-05-live-dispatch.md),
@@ -99,7 +99,8 @@ snapshots are validation context, not state authority.
   streams physical events into the action engine in real time — foreground,
   bounded by a hard deadline, zero side effects by default, and a clean exit
   on deadline, Ctrl+C, or disconnect. Background daemon wiring, auto-restart,
-  and auto-reconnect remain planned (G8).
+  and auto-reconnect are implemented as the G8 background service (see the G8
+  line below).
 
 ## M4 — AI workflow demonstration
 
@@ -122,3 +123,17 @@ snapshots are validation context, not state authority.
   approval reference `owner:2026-08-05:v0.1.0-release`. CI passed on the release
   commit, the physical validation checklist is 10/10, and the `v0.1.0` tag and
   GitHub Release (wheel + sdist + SHA256SUMS) are published on the owner's fork.
+
+## M6 — Background service (G8)
+
+**Status:** Implemented — P5 owner-present validation pending
+
+- [x] Background service with in-process reconnect, bounded sessions, and a
+  clean SIGTERM stop. Evidence:
+  [the G8 service design](docs/superpowers/specs/2026-08-05-g8-service-design.md),
+  approval reference `owner:2026-08-05:g8-service`. `n3-ai-deck-service`
+  re-resolves the approved vendor node every iteration (never cached),
+  reconnects with capped backoff after an absent node or a disconnected
+  session, and prints the owner-gated systemd user unit and udev rules
+  without installing anything. The P5 owner-present validation record will be
+  linked here when complete.

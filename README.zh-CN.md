@@ -8,7 +8,7 @@
 
 **N3 AI Deck 是面向 Linux 和妙联宝/Mirabox N3 V3.0 的开源、本地优先 AI 生产力控制台。** 项目目标是把六个 LCD 按键、三个圆形按键和三个旋钮变成可视、可重复的 AI 与桌面自动化工作流入口。
 
-> **Early Preview：** `6602:1000` 是机主报告为 N3 V3.0 的 USB ID 候选，其物理型号身份未独立确认。协议兼容性、初始化、输入控件、亮度和 LCD 写入已在机主的 `6602:1000` 设备上完成真机验证（带日期的验证记录见 `docs/validation/`）。daemon 后台接线（G8）、GUI 配置与入口点发现仍属规划；在 `v0.1.0` 之前不要把该分支作为生产设备驱动使用。
+> **Early Preview：** `6602:1000` 是机主报告为 N3 V3.0 的 USB ID 候选，其物理型号身份未独立确认。协议兼容性、初始化、输入控件、亮度和 LCD 写入已在机主的 `6602:1000` 设备上完成真机验证（带日期的验证记录见 `docs/validation/`）。G8 后台服务已在当前源码中实现（见下文「后台服务（G8）」章节）；GUI 配置与入口点发现仍属规划；在 `v0.1.0` 之前不要把该分支作为生产设备驱动使用。
 
 ## 可以用来做什么
 
@@ -34,7 +34,7 @@ n3-ai-deck-live --feedback
 
 `--feedback` 通过已验证的按键图像路径写入每个按键的 LCD 状态图像（执行中 / 成功 / 失败 / 超时）。发布内容还包含 `n3-ai-deck-run-action`（无硬件动作运行）以及发现和限时只读观测命令（`n3-ai-deck-detect`、`n3-ai-deck-observe-inputs`）。发布说明见 [releases/tag/v0.1.0](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.1.0)，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-**v0.1.0 范围。** v0.1.0 发布包含已验证的机主运行路径。G8 daemon 后台接线（自动重启、自动重连、后台实时派发）**不包含**在 v0.1.0 中。
+**v0.1.0 范围。** v0.1.0 发布包含已验证的机主运行路径。G8 后台服务（自动重启、自动重连、后台实时派发）**不包含**在 v0.1.0 发布产物中；该功能在 v0.1.0 标签之后落地，随下一个发布提供。
 
 **上游遗留命令。** 分发包同时安装继承的上游控制台脚本——`streamdock-n3`、`streamdock-n3-gui`、`streamdock-n3-probe`、`streamdock-n3-debug` 和遗留安装命令。它们属于上游遗留，仅为延续兼容而保留，**不属于已验证的 N3 AI Deck 路径**；不要把它们用于已验证的 `6602:1000` 流程（见 M1 章节）。
 
@@ -45,7 +45,7 @@ n3-ai-deck-live --feedback
 | 机主报告的 N3 V3.0 候选 | `6602:1000` | USB ID 候选；身份未独立确认；协议、初始化、输入控件、亮度与 LCD 写入已在机主的 `6602:1000` 设备上验证 |
 | FHOOU/Mirabox N3 参考型号 | `6603:1003` | 上游已支持，等待 N3 AI Deck 重新验证 |
 
-当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构的主动设备边界（适配层、vendor 后端与机主运行的实时派发）已实现并通过真机验证（M2–M4）。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；daemon 后台接线仍处于规划中。发布门槛见 [ROADMAP.md](ROADMAP.md)。
+当前代码保留了上游项目的 Linux 后台服务和 GTK4 界面。M1 已实现独立的只读发现路径；目标架构的主动设备边界（适配层、vendor 后端与机主运行的实时派发）已实现并通过真机验证（M2–M4）。M3 已实现动作引擎契约、安全内置插件、无硬件的演示 CLI 和机主运行的实时派发 CLI（`n3-ai-deck-live`）；由硬件触发的后台接线已作为 G8 后台服务实现（`n3-ai-deck-service`，见下文）。发布门槛见 [ROADMAP.md](ROADMAP.md)。
 
 > **Early Preview 命名说明：** Python 分发包和 CLI 标识符仍保留上游的 `streamdock-n3-linux` 与 `streamdock-n3` 名称，并标注为上游遗留。命名和版本方案已在 v0.1.0 中解决：分发包版本现为 `0.1.0`，继承的 `0.2.5` 版本脉络（并非 N3 AI Deck 的发布版本）记录在 CHANGELOG 中。
 
@@ -76,7 +76,7 @@ M3 已实现不接触硬件的动作引擎：进程内插件契约、带超时�
 uv run n3-ai-deck-run-action --event button.1.press --dry-run
 ```
 
-随附的默认绑定把每个标准事件都绑定到无副作用的结构化日志；从实体事件触发动作已通过下面的实时派发 CLI 实现，daemon 后台接线仍处于规划中。
+随附的默认绑定把每个标准事件都绑定到无副作用的结构化日志；从实体事件触发动作已通过下面的实时派发 CLI 和 G8 后台服务（见下文）实现。
 
 ## 实时派发（`n3-ai-deck-live`）
 
@@ -105,6 +105,20 @@ uv run n3-ai-deck-live --feedback --timeout-seconds 15
 ```bash
 uv run n3-ai-deck-live --feedback --timeout-seconds 15 --dry-run
 ```
+
+## 后台服务（G8）
+
+G8 后台服务（`n3-ai-deck-service`）自动运行已验证的实时派发路径：每次迭代重新解析已批准的设备节点，一个接一个地运行有界实时会话，设备拔出或节点缺失时按封顶退避策略重连，收到 SIGTERM 时干净退出。CLI 只打印机主门控的 systemd 用户单元与 udev 规则，从不安装——安装由你自己完成：
+
+```bash
+n3-ai-deck-service --print-unit > ~/.config/systemd/user/n3-ai-deck.service
+n3-ai-deck-service --print-udev-rule | sudo tee /etc/udev/rules.d/90-n3-ai-deck.rules
+sudo udevadm control --reload && sudo udevadm trigger
+systemctl --user daemon-reload
+systemctl --user enable --now n3-ai-deck
+```
+
+AI 凭据从 `~/.config/streamdock-n3/service.env` 读取（`N3_AI_DECK_API_KEY` 变量，文件权限 `0600`；文件缺失不报错）。停止服务用 `systemctl --user stop n3-ai-deck`。该服务依赖会话绑定的 `uaccess` 权限，需要活跃的桌面会话；挂死的插件只会卡住当前这一场有界会话直到时限，systemd 的 `Restart=on-failure` 层是兜底。
 
 ## 规划中的执行链路
 

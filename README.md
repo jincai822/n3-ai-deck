@@ -8,7 +8,7 @@
 
 **N3 AI Deck is an open-source, local-first AI productivity console for the Mirabox/妙联宝 N3 V3.0 on Linux.** It aims to turn six LCD keys, three round buttons, and three knobs into visible, repeatable AI and desktop automation workflows.
 
-> **Early Preview:** `6602:1000` is an owner-reported N3 V3.0 USB ID candidate whose physical identity is not independently confirmed. Its protocol compatibility, initialization, input controls, brightness, and LCD writes have been validated on the owner's `6602:1000` unit, with dated evidence records in `docs/validation/`. Daemon-managed background wiring (G8), GUI configuration, and entry-point discovery remain planned; do not rely on this branch as a production device driver yet.
+> **Early Preview:** `6602:1000` is an owner-reported N3 V3.0 USB ID candidate whose physical identity is not independently confirmed. Its protocol compatibility, initialization, input controls, brightness, and LCD writes have been validated on the owner's `6602:1000` unit, with dated evidence records in `docs/validation/`. The G8 background service is implemented in the current source (see the Background service section); GUI configuration and entry-point discovery remain planned; do not rely on this branch as a production device driver yet.
 
 ## What it is for
 
@@ -34,7 +34,7 @@ n3-ai-deck-live --feedback
 
 `--feedback` writes per-key LCD state images (running / success / failure / timeout) through the validated key-image path. The release also installs `n3-ai-deck-run-action` for hardware-free action runs, plus the discovery and bounded read-only observation commands (`n3-ai-deck-detect`, `n3-ai-deck-observe-inputs`). See the [release notes](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.1.0) and [CHANGELOG.md](CHANGELOG.md).
 
-**v0.1.0 scope.** The v0.1.0 release ships the validated owner-run path. G8 daemon-managed background wiring (auto-restart, auto-reconnect, background live dispatch) is **not included** in v0.1.0.
+**v0.1.0 scope.** The v0.1.0 release ships the validated owner-run path. The G8 background service (auto-restart, auto-reconnect, background live dispatch) was **not included** in the v0.1.0 release artifacts; it landed after the v0.1.0 tag and ships in the next release.
 
 **Upstream legacy commands.** The distribution also installs the inherited upstream console scripts — `streamdock-n3`, `streamdock-n3-gui`, `streamdock-n3-probe`, `streamdock-n3-debug`, and the legacy install command. They are upstream legacy, kept for continuity, and are **not part of the validated N3 AI Deck path**; do not use them for the validated `6602:1000` flow (see the M1 section).
 
@@ -45,7 +45,7 @@ n3-ai-deck-live --feedback
 | Owner-reported N3 V3.0 candidate | `6602:1000` | USB ID candidate; identity not independently confirmed; protocol, init, inputs, brightness, and LCD writes validated on the owner's `6602:1000` unit |
 | FHOOU/Mirabox N3 reference variant | `6603:1003` | Supported by upstream; N3 AI Deck revalidation pending |
 
-The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture's active device boundary — adapter, vendor backends, and owner-run live dispatch — is implemented and hardware-validated (M2–M4). M3 implements the action engine contract, safe builtin plugins, a hardware-free demo CLI, and an owner-run live dispatch CLI (`n3-ai-deck-live`); hardware-triggered wiring remains planned as daemon-managed background wiring. See [ROADMAP.md](ROADMAP.md) for release gates.
+The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture's active device boundary — adapter, vendor backends, and owner-run live dispatch — is implemented and hardware-validated (M2–M4). M3 implements the action engine contract, safe builtin plugins, a hardware-free demo CLI, and an owner-run live dispatch CLI (`n3-ai-deck-live`); hardware-triggered background wiring is implemented as the G8 background service (`n3-ai-deck-service`, see below). See [ROADMAP.md](ROADMAP.md) for release gates.
 
 > **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names, labeled as upstream legacy. Naming and versioning are resolved for v0.1.0: the distribution version is now `0.1.0`, and the inherited `0.2.5` lineage — which was not an N3 AI Deck release — is recorded in the CHANGELOG.
 
@@ -81,7 +81,7 @@ uv run n3-ai-deck-run-action --event button.1.press --dry-run
 
 The shipped default binds every standard event to structured logging with no
 side effects; physical-event dispatch is implemented as the owner-run live
-CLI below, while daemon-managed background wiring remains planned.
+CLI below and as the G8 background service (see below).
 
 ## Live dispatch (`n3-ai-deck-live`)
 
@@ -127,6 +127,30 @@ resolved setup without a device:
 ```bash
 uv run n3-ai-deck-live --feedback --timeout-seconds 15 --dry-run
 ```
+
+## Background service (G8)
+
+The G8 background service (`n3-ai-deck-service`) runs the validated live
+dispatch path automatically: it re-resolves the approved device node, runs
+bounded live sessions back-to-back, reconnects with capped backoff after an
+unplug or an absent node, and stops cleanly on SIGTERM. It prints the
+owner-gated systemd user unit and udev rule and never installs anything —
+install them yourself:
+
+```bash
+n3-ai-deck-service --print-unit > ~/.config/systemd/user/n3-ai-deck.service
+n3-ai-deck-service --print-udev-rule | sudo tee /etc/udev/rules.d/90-n3-ai-deck.rules
+sudo udevadm control --reload && sudo udevadm trigger
+systemctl --user daemon-reload
+systemctl --user enable --now n3-ai-deck
+```
+
+The AI credential is read from `~/.config/streamdock-n3/service.env`
+(the `N3_AI_DECK_API_KEY` variable, file mode `0600`; a missing file is not
+a failure). Stop the service with `systemctl --user stop n3-ai-deck`. The
+service needs an active desktop session for the session-bound `uaccess`
+permission; a hung plugin stalls its bounded session until the deadline, and
+the systemd `Restart=on-failure` layer is the backstop.
 
 ## Planned flow
 

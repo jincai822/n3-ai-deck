@@ -319,7 +319,7 @@ def test_public_docs_describe_live_dispatch() -> None:
         "n3-ai-deck-live",
         "--dry-run",
         "zero side effects",
-        "daemon-managed background wiring remains planned",
+        "Background service (G8)",
     ):
         assert required in english
 
@@ -390,6 +390,44 @@ def test_public_docs_describe_m4_ai_workflow() -> None:
             ), f"unsupported compatibility claim: {line}"
 
 
+def test_public_docs_describe_background_service() -> None:
+    english = read_text("README.md")
+    chinese = read_text("README.zh-CN.md")
+    architecture = read_text("docs/ARCHITECTURE.md")
+    roadmap = read_text("ROADMAP.md")
+
+    for required in (
+        "n3-ai-deck-service",
+        "--print-unit",
+        "--print-udev-rule",
+        "systemctl --user",
+    ):
+        assert required in english
+        assert required in chinese
+
+    for required in (
+        "n3-ai-deck-service",
+        "backoff",
+        "SIGTERM",
+        "Restart=on-failure",
+        "uaccess",
+    ):
+        assert required in architecture
+
+    for required in (
+        "- [x] Background service",
+        "docs/superpowers/specs/2026-08-05-g8-service-design.md",
+        "owner:2026-08-05:g8-service",
+    ):
+        assert required in roadmap
+
+    for text in (english, chinese, architecture, roadmap):
+        for line in text.splitlines():
+            assert not (
+                "6602:1000" in line and ("supported" in line.lower() or "已支持" in line)
+            ), f"unsupported compatibility claim: {line}"
+
+
 def test_readme_has_no_inherited_release_claims() -> None:
     english = read_text("README.md")
     assert "asad-albadi/streamdock-n3/releases/latest" not in english
@@ -413,7 +451,7 @@ def test_public_docs_label_unavailable_architecture_as_planned() -> None:
 
     assert "target architecture" in english
     assert "planned public core" in english
-    assert "hardware-triggered wiring remains planned" in english
+    assert "GUI configuration and entry-point discovery remain planned" in english
     assert "目标架构" in chinese
     assert "规划中的公开核心" in chinese
     assert "target architecture" in architecture

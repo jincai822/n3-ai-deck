@@ -1,6 +1,6 @@
 # Architecture
 
-N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1, and the hardware-free G0 simulation foundation is implemented in M2. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active hardware stages G1–G7 were implemented and validated on the owner's `6602:1000` unit during M2; daemon-managed background wiring (G8), GUI configuration, and entry-point discovery remain planned. Everything below distinguishes those implemented M1/G0 boundaries from the planned target architecture.
+N3 AI Deck evolves the existing `streamdock_n3` package incrementally. The passive, read-only `device_catalog.py` and `discovery.py` path for sysfs USB/HID metadata is implemented in M1, and the hardware-free G0 simulation foundation is implemented in M2. This passive catalog is not ProductIDs.g_products and does not modify the vendored SDK's active product table. The active hardware stages G1–G7 were implemented and validated on the owner's `6602:1000` unit during M2, and the G8 background service is implemented in the current source; GUI configuration and entry-point discovery remain planned. Everything below distinguishes those implemented M1/G0 boundaries from the planned target architecture.
 
 ## G0 implemented safety boundary
 
@@ -55,8 +55,8 @@ resolves configured actions for transport-neutral normalized events, enforces
 a hard timeout per execution, and returns a structured result without
 provider-specific logic and without raising across the plugin boundary.
 Entry-point discovery of plugins and GUI configuration remain planned;
-physical-event wiring is implemented as the owner-run live CLI below, while
-daemon-managed background wiring remains planned (G8).
+physical-event wiring is implemented as the owner-run live CLI below and as
+the G8 background service (see the Background service section below).
 
 ### Plugin contract
 
@@ -76,8 +76,24 @@ plus a final summary. The session is bounded by a hard deadline, logs only by
 default (the shipped sample binds every standard event to structured logging),
 and exits cleanly on deadline, Ctrl+C, or disconnect with no auto-reconnect;
 engine and plugin failures never crash the session. Allowlisted app launches
-require an owner-created bindings file. Background daemonization, systemd or
-supervisor-managed auto-restart, and auto-reconnect remain planned (G8).
+require an owner-created bindings file. Background daemonization,
+systemd-managed auto-restart, and auto-reconnect are implemented as the G8
+background service (next section).
+
+### Background service (G8)
+
+The G8 background service (`n3-ai-deck-service`) automates the validated live
+dispatch path: it re-resolves the approved vendor node on every iteration
+(never cached), runs bounded live sessions back-to-back, reconnects with a
+capped backoff schedule after an absent node or a disconnected session, and
+stops cleanly on SIGTERM. Each session builds a fresh engine so a hung plugin
+cannot leak state across sessions; the systemd `Restart=on-failure` layer is
+the backstop. The service runs in the user manager, reads the AI credential
+from `EnvironmentFile` only, and relies on the session-bound G2 `uaccess`
+permission, which requires an active desktop session. `--print-unit` and
+`--print-udev-rule` print the owner-gated systemd user unit and udev rules to
+stdout only — the owner installs them with sudo themselves, and the service
+never writes system files. The legacy `daemon.py` remains untouched legacy.
 
 ### AI workflow and LCD state feedback
 
@@ -92,7 +108,8 @@ credential degrades only the `ai_text` plugin. The owner-run live CLI gained
 success / red failure / orange timeout) through the G7-validated BAT frame
 pipeline as best-effort writes that never affect the session, and
 `--timeout-seconds` to bound each engine execution. Background daemonization
-and daemon-managed wiring remain planned (G8).
+and daemon-managed wiring are implemented as the G8 background service
+(see the Background service section above).
 
 ### Local UI and diagnostics
 
