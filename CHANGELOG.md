@@ -22,7 +22,7 @@
 
 - Distribution version bumped from `0.1.0` to `0.3.0`.
 - `0.2.0` was skipped to avoid colliding with the upstream `v0.2.0`–`v0.2.5`
-  release lineage hosted on this repository.
+  release lineage hosted on the upstream repository.
 
 ### Fixed
 
