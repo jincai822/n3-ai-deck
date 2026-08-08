@@ -291,7 +291,7 @@ helper 拒绝清单外的命令。IPC 不提供通用 raw write、任意 method 
 
 - [ ] G2 与 SDK/profile 激活分开批准。
 - [ ] 首次测试优先采用单一节点、当前用户的临时 ACL；任何 ACL 变更仍需明确批准。
-- [ ] 持久规则精确匹配 `6602:1000` 和已验证 subsystem/interface。
+- [ ] 持久规则精确匹配 `6602:1000` 的 USB 设备级属性和已验证 subsystem；udev 规则的 `ATTRS{}` 只能匹配一个父设备，接口属性不与设备属性同处一行，接口级批准由软件实施。
 - [ ] 禁止 vendor-only、`MODE="0666"` 和无证据的 USB/hidraw/input 联合授权。
 - [ ] 离线规则 fixture 和安装事务测试不写 `/etc` 或 `/usr`。
 - [ ] 真实安装、reload、trigger、插拔和 systemctl 不由自动化执行。

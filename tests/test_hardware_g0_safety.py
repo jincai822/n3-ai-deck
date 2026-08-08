@@ -59,7 +59,7 @@ REVIEWED_SOURCE_SHA256 = {
         "46f87658b5ef91da5605c7eb429867255d3c0ded3581d0262988b36476d692c5"
     ),
     Path("src/streamdock_n3/hardware/permissions.py"): (
-        "bfb07fdf9bada8fa796699b37aba07cc3d684a192554963788ab543f3303e32a"
+        "b43368028a3d0d432ec45817c428a5dea5a1a19fe466e99b380398b26ee035c1"
     ),
     Path("src/streamdock_n3/hardware/gate.py"): (
         "ce17ca9d8e2f3f7710e3b77ce63e95ab28d4b96d21e3ddac920329297638bce6"

@@ -12,7 +12,7 @@
 
 - Sources of truth, in order: `tasks/prd-m2-n3-v3-hardware-controls.md` version 1.0, `docs/superpowers/specs/2026-08-03-m2-hardware-controls-design.md` (section 8 权限设计), and `docs/superpowers/specs/2026-08-03-m2-g0-transactional-adapter-safety-design.md`.
 - G2 produces offline templates and tests only. No command under this plan writes `/etc`, `/usr`, runs `udevadm`, `systemctl`, `setfacl`/`getfacl`, `chown`, `chmod`, `sudo`, triggers replug, or installs/uninstalls anything on the host.
-- The persistent rule is a lazy template generated in the repository, matching exactly `6602:1000` plus the validated subsystem/interface, using `TAG+="uaccess"`. Forbidden: vendor-only matching, `MODE="0666"`, unproven combined USB/hidraw/input grants, and adding the user to a generic input-reading group.
+- The persistent rule is a lazy template generated in the repository, matching exactly `6602:1000` on the USB device plus the validated subsystem, using `TAG+="uaccess"` (device-level only: a udev rule's `ATTRS{}` matches one parent device, so the interface attributes are not combined in the rule; interface-level approval is enforced by the software). Forbidden: vendor-only matching, `MODE="0666"`, unproven combined USB/hidraw/input grants, and adding the user to a generic input-reading group.
 - The default first real-device strategy remains: no persistent rule; prefer a temporary single-node ACL for the current user, applied only as a separate manual action.
 - Permission grants derive from G1-approved roles only: input interface `01` justifies the input subsystem; control interface `00` justifies hidraw. No other subsystem may be granted.
 - The G2 dependency closure remains standard-library-only plus the safe M1 `device_catalog` contracts. The generation module must never execute subprocesses, never open files for writing, and never read `/dev` or sysfs.
@@ -68,7 +68,7 @@ class PermissionPlan:
 def temporary_acl_plan(role: InterfaceRole) -> PermissionArtifact
 def persistent_rule(
     vendor_id: int, product_id: int,
-    interface: HidInterface, role: InterfaceRole,
+    role: InterfaceRole,
 ) -> PermissionArtifact
 def make_permission_plan(
     resolution: InterfaceRoleResolution, approval_reference: str,
@@ -88,9 +88,12 @@ Rules (documented, no guessing):
 
 1. A permission artifact is valid only for a subsystem justified by an approved G1 role:
    `INPUT` → `input`; `CONTROL` → `hidraw`; `UNKNOWN` → invalid.
-2. The persistent rule matches `ATTR{idVendor}=="6602"` AND `ATTR{idProduct}=="1000"` AND the
-   interface attribute tuple, uses `TAG+="uaccess"`, and never contains `MODE="0666"`,
-   a vendor-only match, or combined subsystem grants in one rule.
+2. The persistent rule matches `ATTR{idVendor}=="6602"` AND `ATTR{idProduct}=="1000"` on the
+   USB device only — a udev rule's `ATTRS{}` matches draw from the event device plus exactly
+   one parent device, so the interface attribute tuple cannot be combined in one rule and
+   interface-level approval is enforced by the software, not udev. The rule uses
+   `TAG+="uaccess"`, and never contains `MODE="0666"`, a vendor-only match, or combined
+   subsystem grants in one rule.
 3. The temporary ACL plan names exactly one node placeholder and the current-user placeholder;
    it is never executed by this plan.
 4. `InstallTransaction` rejects any operation without an explicit root; a root equal to or
@@ -131,10 +134,10 @@ def test_unknown_role_cannot_generate_artifacts() -> None:
     with pytest.raises(ValueError):
         temporary_acl_plan(InterfaceRole.UNKNOWN)
     with pytest.raises(ValueError):
-        persistent_rule(0x6602, 0x1000, HidInterface(0, 3, 0, 0), InterfaceRole.UNKNOWN)
+        persistent_rule(0x6602, 0x1000, InterfaceRole.UNKNOWN)
 
 def test_persistent_rule_is_exact_and_uaccess_only() -> None:
-    rule = persistent_rule(0x6602, 0x1000, HidInterface(0, 3, 0, 0), InterfaceRole.CONTROL)
+    rule = persistent_rule(0x6602, 0x1000, InterfaceRole.CONTROL)
     assert 'ATTR{idVendor}=="6602"' in rule.rendered
     assert 'ATTR{idProduct}=="1000"' in rule.rendered
     assert 'TAG+="uaccess"' in rule.rendered
@@ -184,8 +187,10 @@ PermissionPlan | None = None` (validated as `PermissionPlan | None`;
 Create `hardware/permissions.py` importing only `streamdock_n3.hardware.contracts`
 and the standard library. `persistent_rule` renders the exact rule; the input
 rule targets `SUBSYSTEM=="input", KERNEL=="event*"` and the hidraw rule targets
-`SUBSYSTEM=="hidraw"`, both with the exact `6602:1000` attribute match and the
-interface class/subclass/protocol attributes, `TAG+="uaccess"` only. The ACL
+`SUBSYSTEM=="hidraw"`, both with the exact `6602:1000` USB-device attribute
+match and `TAG+="uaccess"` only — a udev rule's `ATTRS{}` matches one parent
+device, so interface class/subclass/protocol attributes are not combined in the
+rule and interface-level approval is enforced by the software. The ACL
 plan renders a setfacl command plan with one node placeholder and one
 current-user placeholder. `make_permission_plan` derives the subsystems from the
 resolution's `input_interface`/`control_interface` roles and raises
@@ -438,7 +443,9 @@ diff. Require explicit findings for:
 
 1. G2 never writes system state and never executes permission commands; the
    transaction only ever targets an explicit root outside `/etc`/`/usr`.
-2. Rules match exactly `6602:1000` plus the validated subsystem/interface and use
+2. Rules match exactly `6602:1000` on the USB device plus the validated
+   subsystem (device-level only, because a rule's `ATTRS{}` matches one parent
+   device; interface-level approval is enforced by the software) and use
    `TAG+="uaccess"`; no `MODE="0666"`, no vendor-only match, no combined grants.
 3. The temporary ACL plan is the default first strategy and is never executed.
 4. The G2 gate requires a role-consistent permission plan and fails closed on
@@ -462,7 +469,7 @@ locally and stop; do not push or publish.
 ## Completion Checklist
 
 - [ ] Artifacts derive only from G1-approved roles; `UNKNOWN` cannot generate anything.
-- [ ] The persistent rule is exact `6602:1000` + subsystem/interface + `TAG+="uaccess"`; forbidden forms are rejected by tests.
+- [ ] The persistent rule is exact `6602:1000` USB-device-level match + subsystem + `TAG+="uaccess"` (no interface attributes: a rule's `ATTRS{}` matches one parent device; interface approval is enforced by the software); forbidden forms are rejected by tests.
 - [ ] The ACL plan uses placeholders only and is never executed.
 - [ ] `InstallTransaction` requires an explicit root, rejects `/etc`/`/usr`, verifies symlink/owner/content before commit, and rolls back byte-for-byte.
 - [ ] The G2 gate requires a role-consistent permission plan and fails closed otherwise.

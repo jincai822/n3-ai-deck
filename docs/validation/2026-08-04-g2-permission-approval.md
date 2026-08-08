@@ -6,7 +6,7 @@
 | Approval reference | `owner:2026-08-04:g2` |
 | Software commit | `00c8b78` |
 | Source | G1-approved candidate roles: interface `01` (`03/01/01`) input, interface `00` (`03/00/00`) control |
-| Plan digest | `998756f6df3734291d064fcae37fee2deeb77aed04d06e75d802f2371aad51e3` |
+| Plan digest | `40f3ab1c6be3149d0274839e258a240a9ee6cf3834f0a66109265acd1e5d075a` |
 
 Approved offline artifacts (rendered, redacted):
 
@@ -14,8 +14,8 @@ Approved offline artifacts (rendered, redacted):
 |---|---|---|---|
 | `temporary_acl` | `input` | `input` | `setfacl -m u:{current_user}:rw {node}` |
 | `temporary_acl` | `hidraw` | `control` | `setfacl -m u:{current_user}:rw {node}` |
-| `persistent_rule` | `input` | `input` | `SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="6602", ATTRS{idProduct}=="1000", ATTRS{bInterfaceClass}=="03", ATTRS{bInterfaceSubClass}=="01", ATTRS{bInterfaceProtocol}=="01", TAG+="uaccess"` |
-| `persistent_rule` | `hidraw` | `control` | `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="6602", ATTRS{idProduct}=="1000", ATTRS{bInterfaceClass}=="03", ATTRS{bInterfaceSubClass}=="00", ATTRS{bInterfaceProtocol}=="00", TAG+="uaccess"` |
+| `persistent_rule` | `input` | `input` | `SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="6602", ATTRS{idProduct}=="1000", TAG+="uaccess"` |
+| `persistent_rule` | `hidraw` | `control` | `SUBSYSTEM=="hidraw", ATTRS{idVendor}=="6602", ATTRS{idProduct}=="1000", TAG+="uaccess"` |
 
 Boundary statements:
 

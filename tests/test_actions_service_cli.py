@@ -119,12 +119,34 @@ class TestPrintUdevRule:
         assert out.count('TAG+="uaccess"') == 2
         assert out.count('ATTRS{idVendor}=="6602"') == 2
         assert out.count('ATTRS{idProduct}=="1000"') == 2
-        assert out.count('ATTRS{bInterfaceClass}=="03"') == 2
-        # Input triple 03/01/01 and control triple 03/00/00.
-        assert 'ATTRS{bInterfaceSubClass}=="01"' in out
-        assert 'ATTRS{bInterfaceProtocol}=="01"' in out
-        assert 'ATTRS{bInterfaceSubClass}=="00"' in out
-        assert 'ATTRS{bInterfaceProtocol}=="00"' in out
+        assert (
+            'SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="6602", '
+            'ATTRS{idProduct}=="1000", TAG+="uaccess"' in out
+        )
+        assert (
+            'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="6602", '
+            'ATTRS{idProduct}=="1000", TAG+="uaccess"' in out
+        )
+        # The generated header documents the single-parent udev constraint and
+        # the filename that sorts before 73-seat-late.rules.
+        assert "only one parent" in out
+        assert "60-n3-ai-deck.rules" in out
+
+    def test_print_udev_rule_is_usb_device_level_only(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        code, out = _run(["--print-udev-rule"], capsys)
+
+        assert code == 0
+        for line in out.splitlines():
+            if not line or line.startswith("#"):
+                continue
+            # A udev rule's ATTRS{} matches one parent device only: never mix
+            # the usb_device-level idVendor/idProduct with usb_interface
+            # attributes on a rule line.
+            assert "bInterfaceClass" not in line
+            assert "bInterfaceSubClass" not in line
+            assert "bInterfaceProtocol" not in line
 
     def test_print_udev_rule_never_world_writable(self, capsys: pytest.CaptureFixture[str]) -> None:
         code, out = _run(["--print-udev-rule"], capsys)

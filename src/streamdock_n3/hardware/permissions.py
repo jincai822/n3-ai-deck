@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from streamdock_n3.hardware.contracts import (
-    HidInterface,
     InterfaceRole,
     InterfaceRoleResolution,
     PermissionArtifact,
@@ -39,10 +38,17 @@ def temporary_acl_plan(role: InterfaceRole) -> PermissionArtifact:
 def persistent_rule(
     vendor_id: int,
     product_id: int,
-    interface: HidInterface,
     role: InterfaceRole,
 ) -> PermissionArtifact:
-    """Render the precise lazy udev rule template for one approved role."""
+    """Render the precise lazy udev rule template for one approved role.
+
+    The match is USB-device-level only (idVendor/idProduct): a udev rule's
+    ``ATTRS{}`` matches may draw from the event device plus exactly ONE single
+    parent device, so the interface attributes (bInterfaceClass / SubClass /
+    Protocol, on a different parent) cannot be combined with idVendor /
+    idProduct in one rule. Interface-level approval is therefore enforced by
+    the software at runtime, not by udev.
+    """
     if role is InterfaceRole.INPUT:
         subsystem_match = 'SUBSYSTEM=="input", KERNEL=="event*"'
         subsystem = "input"
@@ -55,9 +61,6 @@ def persistent_rule(
         f'{subsystem_match}, '
         f'ATTRS{{idVendor}}=="{vendor_id:04x}", '
         f'ATTRS{{idProduct}}=="{product_id:04x}", '
-        f'ATTRS{{bInterfaceClass}}=="{interface.interface_class:02x}", '
-        f'ATTRS{{bInterfaceSubClass}}=="{interface.subclass:02x}", '
-        f'ATTRS{{bInterfaceProtocol}}=="{interface.protocol:02x}", '
         f'TAG+="uaccess"'
     )
     return PermissionArtifact(PermissionKind.PERSISTENT_RULE, subsystem, role, rendered)
@@ -77,8 +80,8 @@ def make_permission_plan(
     artifacts = (
         temporary_acl_plan(InterfaceRole.INPUT),
         temporary_acl_plan(InterfaceRole.CONTROL),
-        persistent_rule(0x6602, 0x1000, input_interface, InterfaceRole.INPUT),
-        persistent_rule(0x6602, 0x1000, control_interface, InterfaceRole.CONTROL),
+        persistent_rule(0x6602, 0x1000, InterfaceRole.INPUT),
+        persistent_rule(0x6602, 0x1000, InterfaceRole.CONTROL),
     )
     return PermissionPlan(artifacts, approval_reference)
 

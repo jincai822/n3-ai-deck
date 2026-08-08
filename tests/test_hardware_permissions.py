@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from streamdock_n3.hardware.contracts import (
-    HidInterface,
     InterfaceRole,
     PermissionArtifact,
     PermissionKind,
@@ -40,11 +39,11 @@ def test_unknown_role_cannot_generate_artifacts() -> None:
     with pytest.raises(ValueError):
         temporary_acl_plan(InterfaceRole.UNKNOWN)
     with pytest.raises(ValueError):
-        persistent_rule(0x6602, 0x1000, HidInterface(0, 3, 0, 0), InterfaceRole.UNKNOWN)
+        persistent_rule(0x6602, 0x1000, InterfaceRole.UNKNOWN)
 
 
 def test_persistent_rule_is_exact_and_uaccess_only() -> None:
-    rule = persistent_rule(0x6602, 0x1000, HidInterface(0, 3, 0, 0), InterfaceRole.CONTROL)
+    rule = persistent_rule(0x6602, 0x1000, InterfaceRole.CONTROL)
 
     assert 'ATTRS{idVendor}=="6602"' in rule.rendered
     assert 'ATTRS{idProduct}=="1000"' in rule.rendered
@@ -55,8 +54,25 @@ def test_persistent_rule_is_exact_and_uaccess_only() -> None:
     assert rule.subsystem == "hidraw"
 
 
+def test_persistent_rule_is_usb_device_level_only() -> None:
+    control = persistent_rule(0x6602, 0x1000, InterfaceRole.CONTROL)
+    assert control.rendered == (
+        'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="6602", '
+        'ATTRS{idProduct}=="1000", TAG+="uaccess"'
+    )
+    for rendered in (
+        control.rendered,
+        persistent_rule(0x6602, 0x1000, InterfaceRole.INPUT).rendered,
+    ):
+        # A udev rule's ATTRS{} matches one parent device only: never mix the
+        # usb_device-level idVendor/idProduct with usb_interface attributes.
+        assert "bInterfaceClass" not in rendered
+        assert "bInterfaceSubClass" not in rendered
+        assert "bInterfaceProtocol" not in rendered
+
+
 def test_persistent_input_rule_targets_input_event_subsystem() -> None:
-    rule = persistent_rule(0x6602, 0x1000, HidInterface(1, 3, 1, 1), InterfaceRole.INPUT)
+    rule = persistent_rule(0x6602, 0x1000, InterfaceRole.INPUT)
 
     assert 'SUBSYSTEM=="input"' in rule.rendered
     assert 'KERNEL=="event*"' in rule.rendered
@@ -102,7 +118,7 @@ def test_plan_requires_resolved_roles() -> None:
 
 def make_artifact(kind: str = "rule", subsystem: str = "input") -> PermissionArtifact:
     if kind == "rule":
-        return persistent_rule(0x6602, 0x1000, HidInterface(1, 3, 1, 1), InterfaceRole.INPUT)
+        return persistent_rule(0x6602, 0x1000, InterfaceRole.INPUT)
     return temporary_acl_plan(InterfaceRole.INPUT)
 
 

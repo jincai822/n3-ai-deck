@@ -97,8 +97,13 @@ isolation. Each prerequisite resolves as follows:
 ### 2.4 Permission model (v0.1.x: session-bound)
 
 - G2's approved rule shape comes from `hardware/permissions.py`
-  `persistent_rule`: precise `6602:1000` + the interface triple +
-  `TAG+="uaccess"`; no `0666` anywhere.
+  `persistent_rule`: USB-device-level match (exact `6602:1000`) +
+  `TAG+="uaccess"`; no `0666` anywhere. The match is device-level only
+  because a udev rule's `ATTRS{}` matches may draw from the event device
+  plus exactly ONE parent device, so the interface attributes
+  (`bInterfaceClass`/`SubClass`/`Protocol`, on a different parent) cannot
+  be combined with `idVendor`/`idProduct` in one rule; interface-level
+  approval is enforced by the software, not udev.
 - `uaccess` grants access through logind active-session ACLs. The service
   runs in the user manager (`systemctl --user`); where no seat session
   provides an ACL, the owner enables `Linger=yes` so the user manager can
@@ -108,7 +113,9 @@ isolation. Each prerequisite resolves as follows:
   M2 spec's default is not to install persistent rules (spec §8), the PRD
   requires separate approval for every active action (`prd:26`), and
   unapproved system modifications count as failures (`prd:345`). The CLI only
-  **prints** the rule; the owner installs it with sudo themselves.
+  **prints** the rule; the owner installs it with sudo themselves, as
+  `/etc/udev/rules.d/60-n3-ai-deck.rules` — the `60-` prefix must sort before
+  `73-seat-late.rules`, where the `uaccess` tag takes effect.
 
 ### 2.5 Credentials
 
@@ -211,8 +218,10 @@ Reuses the validated live flags from `actions/live_cli.py` (`--bindings`,
   `Restart=on-failure`, `RestartSec=2`, `WantedBy=default.target`.
   **Print only; never installs or enables.**
 - `--print-udev-rule`: print the G2-shape rule for the approved input and
-  control interfaces (exact `6602:1000` + interface triple +
-  `TAG+="uaccess"`). **Print only; never writes to the system.**
+  control interfaces (USB-device-level `6602:1000` + `TAG+="uaccess"`; the
+  match is device-level only because a rule's `ATTRS{}` matches one parent
+  device — interface-level approval is enforced by the software).
+  **Print only; never writes to the system.**
 
 ### 4.4 systemd user unit (`n3-ai-deck.service`)
 

@@ -139,7 +139,7 @@ install them yourself:
 
 ```bash
 n3-ai-deck-service --print-unit > ~/.config/systemd/user/n3-ai-deck.service
-n3-ai-deck-service --print-udev-rule | sudo tee /etc/udev/rules.d/90-n3-ai-deck.rules
+n3-ai-deck-service --print-udev-rule | sudo tee /etc/udev/rules.d/60-n3-ai-deck.rules
 sudo udevadm control --reload && sudo udevadm trigger
 systemctl --user daemon-reload
 systemctl --user enable --now n3-ai-deck

@@ -45,7 +45,6 @@ from streamdock_n3.actions.service import (
 )
 from streamdock_n3.hardware.contracts import (
     MAX_DEADLINE_MS,
-    HidInterface,
     InterfaceRole,
     KeyMap,
     NormalizedInputEvent,
@@ -60,8 +59,6 @@ DEFAULT_SESSION_DURATION_MS = 60_000
 
 _VENDOR_ID = 0x6602
 _PRODUCT_ID = 0x1000
-_INPUT_INTERFACE = HidInterface(1, 0x03, 0x01, 0x01)
-_CONTROL_INTERFACE = HidInterface(0, 0x03, 0x00, 0x00)
 
 # The systemd user unit: `%h` placeholders only, no absolute paths. ExecStart
 # carries --feedback so LCD state images follow dispatched actions. Print
@@ -82,15 +79,22 @@ RestartSec=2
 WantedBy=default.target
 """
 
-# The G2-approved lazy udev rules (permissions.persistent_rule): precise
-# 6602:1000 + the approved interface triple + TAG+="uaccess", never 0666.
+# The installable udev rules (permissions.persistent_rule): USB-device-level
+# matches (precise 6602:1000 + subsystem + TAG+="uaccess"), never 0666. The
+# printed header comments explain the single-parent udev constraint.
 UDEV_RULE_TEXT = "\n".join(
     (
-        "# N3 AI Deck: approved input interface (6602:1000, class 03/01/01)",
-        persistent_rule(_VENDOR_ID, _PRODUCT_ID, _INPUT_INTERFACE, InterfaceRole.INPUT).rendered,
+        "# N3 AI Deck (6602:1000). Interface-level approval is enforced by the",
+        "# software, not udev: a rule's ATTRS{} may match only one parent",
+        "# device, so the interface attributes cannot be combined with",
+        "# idVendor/idProduct here.",
+        "# Install as /etc/udev/rules.d/60-n3-ai-deck.rules (must sort before",
+        "# 73-seat-late.rules, where the uaccess tag takes effect).",
+        "# input interface",
+        persistent_rule(_VENDOR_ID, _PRODUCT_ID, InterfaceRole.INPUT).rendered,
         "",
-        "# N3 AI Deck: approved control interface (6602:1000, class 03/00/00)",
-        persistent_rule(_VENDOR_ID, _PRODUCT_ID, _CONTROL_INTERFACE, InterfaceRole.CONTROL).rendered,
+        "# control interface",
+        persistent_rule(_VENDOR_ID, _PRODUCT_ID, InterfaceRole.CONTROL).rendered,
         "",
     )
 )
