@@ -50,6 +50,11 @@ def _result(*, disconnected: bool = False, events: int = 0, dispatched: int = 0)
     )
 
 
+def _status_result(status: LiveSessionStatus, *, disconnected: bool = False) -> LiveSessionResult:
+    """A session that ran but ended in a non-succeeded status (rejected/error)."""
+    return LiveSessionResult(status, 0, 0, 0, disconnected, True, 0)
+
+
 class ScriptedResolver:
     """Resolver with a scripted queue of nodes or exceptions; defaults to a node.
 
@@ -277,6 +282,85 @@ class TestRunService:
         assert result.retries == 3
         assert resolver.calls == 4
         assert runner.calls == [FAKE_NODE, FAKE_NODE]
+
+    def test_rejected_session_backs_off_without_reset(self) -> None:
+        resolver = ScriptedResolver()
+        runner = ScriptedRunner(
+            _status_result(LiveSessionStatus.REJECTED),
+            _status_result(LiveSessionStatus.REJECTED),
+            _status_result(LiveSessionStatus.REJECTED),
+        )
+        sleep = ScriptedSleep(stop_after=3)
+        events: list[dict[str, object]] = []
+        result = run_service(
+            _spec(),
+            node_resolver=resolver,
+            session_runner=runner,
+            sleep=sleep,
+            on_lifecycle=events.append,
+        )
+        assert result.stopped_cleanly is True
+        # Every session ran and returned a result, even though none succeeded.
+        assert result.sessions_run == 3
+        assert result.retries == 3
+        assert sleep.calls == [2.0, 5.0, 10.0]  # advancing, never reset
+        assert runner.calls == [FAKE_NODE, FAKE_NODE, FAKE_NODE]
+        retry_events = [e for e in events if e["event"] == "retry"]
+        assert [e["reason"] for e in retry_events] == ["error", "error", "error"]
+        assert [e["backoff_s"] for e in retry_events] == [2.0, 5.0, 10.0]
+        assert [e["status"] for e in events if e["event"] == "session_end"] == [
+            "rejected",
+            "rejected",
+            "rejected",
+        ]
+
+    def test_rejected_session_then_success_resets_backoff(self) -> None:
+        resolver = ScriptedResolver()
+        runner = ScriptedRunner(
+            _status_result(LiveSessionStatus.REJECTED),
+            _result(),
+            _status_result(LiveSessionStatus.REJECTED),
+            ServiceStopped("stop"),
+        )
+        sleep = ScriptedSleep(stop_after=2)
+        events: list[dict[str, object]] = []
+        result = run_service(
+            _spec(),
+            node_resolver=resolver,
+            session_runner=runner,
+            sleep=sleep,
+            on_lifecycle=events.append,
+        )
+        assert result.stopped_cleanly is True
+        assert result.sessions_run == 3
+        assert result.retries == 2
+        # rejected -> 2s; the clean success resets the backoff; the next
+        # rejected session sleeps 2s again -- not 10s.
+        assert sleep.calls == [2.0, 2.0]
+        retry_events = [e for e in events if e["event"] == "retry"]
+        assert [e["backoff_s"] for e in retry_events] == [2.0, 2.0]
+
+    def test_error_status_session_backs_off(self) -> None:
+        resolver = ScriptedResolver()
+        runner = ScriptedRunner(
+            _status_result(LiveSessionStatus.ERROR),
+            _status_result(LiveSessionStatus.ERROR),
+        )
+        sleep = ScriptedSleep(stop_after=2)
+        events: list[dict[str, object]] = []
+        result = run_service(
+            _spec(),
+            node_resolver=resolver,
+            session_runner=runner,
+            sleep=sleep,
+            on_lifecycle=events.append,
+        )
+        assert result.stopped_cleanly is True
+        assert result.sessions_run == 2
+        assert result.retries == 2
+        assert sleep.calls == [2.0, 5.0]
+        retry_events = [e for e in events if e["event"] == "retry"]
+        assert [e["reason"] for e in retry_events] == ["error", "error"]
 
     def test_resolver_called_every_iteration(self) -> None:
         resolver = ScriptedResolver(FAKE_NODE, FAKE_NODE, ServiceStopped("stop"))

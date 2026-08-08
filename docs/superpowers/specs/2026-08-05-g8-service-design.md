@@ -71,8 +71,10 @@ isolation. Each prerequisite resolves as follows:
 - `run_live_loop` returns `LiveSessionStatus.SUCCEEDED` **even when the
   device disconnected** — the returned result carries `disconnected=disconnected`
   alongside `status=SUCCEEDED` (`actions/live.py`, final result block).
-  The service therefore keys on `result.disconnected`, never on the status
-  field alone.
+  The service therefore resets the backoff only for
+  `status == SUCCEEDED` with `disconnected == False`; a `SUCCEEDED` result
+  with a disconnect is still a reconnect event, not a success, and
+  `rejected`/`error` results retry with backoff too.
 - hidraw node numbers can change across unplug/replug. `resolve_vendor_node()`
   (`input_cli.py:185-212`) resolves the approved control interface fresh from
   sysfs each call and raises `NodeResolutionError` when the node is absent.
@@ -175,10 +177,14 @@ Loop algorithm (per iteration):
    (reason `node-absent`), sleep the current backoff, advance the schedule,
    repeat.
 2. Run one bounded session via `session_runner(node, spec)`.
-3. If `result.disconnected`: emit `session_end` + `retry` (reason
-   `disconnected`); do **not** reset backoff; continue.
-4. If the session completed cleanly (no disconnect, events dispatched):
-   reset backoff to the minimum; emit `session_end`; continue.
+3. If `result.disconnected` (including a `SUCCEEDED` status with a
+   disconnect): emit `session_end` + `retry` (reason `disconnected`); do
+   **not** reset backoff; continue.
+4. Only a session that ended `status == SUCCEEDED` with
+   `disconnected == False` resets the backoff to the minimum and emits
+   `session_end`; any other status (`rejected`, `error`) emits `session_end`
+   plus `retry` (reason `error`), sleeps the current backoff, and advances
+   the schedule.
 5. Any unexpected exception from the runner is contained: emit `retry`
    (reason `error`) and let systemd's restart layer cover a repeated hard
    failure.
@@ -241,8 +247,10 @@ repo.
    system files.
 4. **Credentials via `EnvironmentFile` only.** The AI key never appears in a
    unit file, a command line, or the repository.
-5. **Status keyed on `result.disconnected`.** A SUCCEEDED result with
-   `disconnected=True` is treated as a reconnect event, not a success.
+5. **Backoff reset only on clean success.** The loop resets the backoff
+   only for `status == SUCCEEDED` with `disconnected == False`; a `SUCCEEDED`
+   result with `disconnected=True` is a reconnect event, not a success, and
+   `rejected`/`error` sessions retry with backoff — never a hot loop.
 6. **Callbacks are exception-contained.** A throwing `on_lifecycle` callback
    is logged and skipped; it never kills the loop.
 7. **Redacted logging.** Lifecycle events carry no serial, `/dev` node name,

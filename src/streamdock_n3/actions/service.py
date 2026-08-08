@@ -20,7 +20,7 @@ from typing import NoReturn
 
 from streamdock_n3.actions.contracts import _validate_int
 from streamdock_n3.actions.engine import DEFAULT_TIMEOUT_SECONDS
-from streamdock_n3.actions.live import LiveSessionResult
+from streamdock_n3.actions.live import LiveSessionResult, LiveSessionStatus
 from streamdock_n3.hardware.contracts import MAX_DEADLINE_MS
 
 logger = logging.getLogger(__name__)
@@ -134,9 +134,10 @@ def run_service(
 ) -> ServiceResult:
     """Run bounded sessions back-to-back until SIGTERM, reconnecting with backoff.
 
-    The node resolver is re-called on every iteration and never cached. A
-    session that disconnected or failed retries after the current backoff
-    delay; a fully successful session resets the backoff to the start.
+    The node resolver is re-called on every iteration and never cached. Only a
+    session that ended SUCCEEDED without disconnecting resets the backoff to
+    the start; a session that ended rejected, error, or succeeded-but-
+    disconnected retries after the current backoff delay.
     """
     if not isinstance(spec, ServiceSpec):
         raise TypeError("spec must be a ServiceSpec")
@@ -219,22 +220,23 @@ def run_service(
                     "duration_ms": result.duration_ms,
                 },
             )
-            if result.disconnected:
-                retries += 1
-                delay = _backoff_delay(spec.backoff_schedule, backoff_index)
-                backoff_index = min(backoff_index + 1, len(spec.backoff_schedule) - 1)
-                _emit(
-                    on_lifecycle,
-                    {
-                        "event": "retry",
-                        "reason": "disconnected",
-                        "attempt": retries,
-                        "backoff_s": delay,
-                    },
-                )
-                sleep(delay)
+            if result.status is LiveSessionStatus.SUCCEEDED and not result.disconnected:
+                backoff_index = 0
                 continue
-            backoff_index = 0
+            retries += 1
+            delay = _backoff_delay(spec.backoff_schedule, backoff_index)
+            backoff_index = min(backoff_index + 1, len(spec.backoff_schedule) - 1)
+            reason = "disconnected" if result.disconnected else "error"
+            _emit(
+                on_lifecycle,
+                {
+                    "event": "retry",
+                    "reason": reason,
+                    "attempt": retries,
+                    "backoff_s": delay,
+                },
+            )
+            sleep(delay)
     except ServiceStopped:
         _emit(
             on_lifecycle,
