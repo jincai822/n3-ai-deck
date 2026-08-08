@@ -15,7 +15,9 @@ The process never daemonizes, never imports `_vendor`, and never uses a shell.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -130,6 +132,20 @@ def _build_session_runner(
     return runner
 
 
+def _configure_line_buffered_stdout() -> None:
+    """Flush every JSONL log line immediately when stdout is not a TTY.
+
+    Python block-buffers stdout when it is a pipe (systemd/journald), so
+    service log lines would otherwise arrive in bursts or get stuck. The
+    guard keeps the call harmless when a test runner has replaced stdout.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    with contextlib.suppress(OSError, ValueError):
+        reconfigure(line_buffering=True)
+
+
 def _emit_error(detail: str) -> int:
     print(
         json.dumps(
@@ -202,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_line_buffered_stdout()
     args = build_parser().parse_args(argv)
     if args.print_unit:
         print(USER_UNIT_TEXT, end="")

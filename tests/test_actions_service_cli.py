@@ -327,3 +327,25 @@ class TestSessionRunnerWiring:
         # The feedback event callback is wrapped by _compose_event_callback,
         # which prints the event line before applying the LCD feedback.
         assert captured["on_event"] is fake_event
+
+
+def test_main_configures_line_buffered_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JSONL log lines must flush immediately when stdout is a pipe/journald."""
+
+    reconfigure_calls: list[dict[str, bool]] = []
+
+    class FakeStdout:
+        def reconfigure(self, **kwargs: object) -> None:
+            reconfigure_calls.append(kwargs)
+
+        def write(self, text: str) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(service_cli.sys, "stdout", FakeStdout())
+
+    assert service_cli.main(["--print-unit"]) == 0
+
+    assert reconfigure_calls == [{"line_buffering": True}]

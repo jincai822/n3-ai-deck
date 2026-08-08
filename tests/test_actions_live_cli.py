@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from streamdock_n3.actions import live_cli
 from streamdock_n3.actions.contracts import ActionResult, ActionStatus
 from streamdock_n3.actions.engine import ActionEngine
 from streamdock_n3.actions.feedback import FeedbackState
@@ -524,3 +525,32 @@ def test_feedback_write_failure_is_ignored(
     lines = out.splitlines()
     assert len(lines) == 2
     assert json.loads(lines[-1])["status"] == "succeeded"
+
+
+def test_main_configures_line_buffered_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSONL log lines must flush immediately when stdout is a pipe/journald."""
+
+    reconfigure_calls: list[dict[str, bool]] = []
+
+    class FakeStdout:
+        def reconfigure(self, **kwargs: object) -> None:
+            reconfigure_calls.append(kwargs)
+
+        def write(self, text: str) -> None:
+            return None
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setattr(live_cli.sys, "stdout", FakeStdout())
+    monkeypatch.setattr(
+        "streamdock_n3.actions.live_cli.resolve_vendor_node", lambda: "vendor-node"
+    )
+    monkeypatch.setattr("streamdock_n3.actions.live_cli.config_dir", lambda: tmp_path)
+
+    assert live_cli.main(["--dry-run"]) == 0
+
+    assert reconfigure_calls == [{"line_buffering": True}]
