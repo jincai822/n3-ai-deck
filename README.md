@@ -18,12 +18,12 @@
 - Keep credentials and execution local by default.
 - Add integrations through the documented plugin contract and safe builtin plugins.
 
-## Install (v0.2.0)
+## Install (v0.3.0)
 
-Install the v0.2.0 release wheel with pipx (requires [pipx](https://pipx.pypa.io/)):
+Install the v0.3.0 release wheel with pipx (requires [pipx](https://pipx.pypa.io/)):
 
 ```bash
-pipx install https://github.com/jincai822/n3-ai-deck/releases/download/v0.2.0/streamdock_n3_linux-0.2.0-py3-none-any.whl
+pipx install https://github.com/jincai822/n3-ai-deck/releases/download/v0.3.0/streamdock_n3_linux-0.3.0-py3-none-any.whl
 ```
 
 With the device plugged in, the G8 background service (`n3-ai-deck-service`)
@@ -35,9 +35,9 @@ owner-run live dispatch CLI to stream physical events in real time:
 n3-ai-deck-live --feedback
 ```
 
-`--feedback` writes per-key LCD state images (running / success / failure / timeout) through the validated key-image path. The release also installs `n3-ai-deck-run-action` for hardware-free action runs, plus the discovery and bounded read-only observation commands (`n3-ai-deck-detect`, `n3-ai-deck-observe-inputs`). See the [release notes](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.2.0) and [CHANGELOG.md](CHANGELOG.md).
+`--feedback` writes per-key LCD state images (running / success / failure / timeout) through the validated key-image path. The release also installs `n3-ai-deck-run-action` for hardware-free action runs, plus the discovery and bounded read-only observation commands (`n3-ai-deck-detect`, `n3-ai-deck-observe-inputs`). See the [release notes](https://github.com/jincai822/n3-ai-deck/releases/tag/v0.3.0) and [CHANGELOG.md](CHANGELOG.md).
 
-**v0.2.0 scope.** The v0.2.0 release ships the validated owner-run path plus
+**v0.3.0 scope.** The v0.3.0 release ships the validated owner-run path plus
 the G8 background service (`n3-ai-deck-service`): a systemd user service with
 in-process reconnect and capped backoff, bounded live sessions, a clean
 SIGTERM stop, journald-ready logging, and the owner-gated installers
@@ -55,7 +55,7 @@ udev rule for automatic `uaccess`).
 
 The current source retains the Linux daemon and GTK4 GUI from the upstream project. M1 implements a separate read-only discovery path; the target architecture's active device boundary — adapter, vendor backends, and owner-run live dispatch — is implemented and hardware-validated (M2–M4). M3 implements the action engine contract, safe builtin plugins, a hardware-free demo CLI, and an owner-run live dispatch CLI (`n3-ai-deck-live`); hardware-triggered background wiring is implemented as the G8 background service (`n3-ai-deck-service`, see below). See [ROADMAP.md](ROADMAP.md) for release gates.
 
-> **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names, labeled as upstream legacy. Naming and versioning are resolved for v0.2.0: the distribution version is now `0.2.0`, and the inherited `0.2.5` lineage — which was not an N3 AI Deck release — is recorded in the CHANGELOG.
+> **Early Preview naming:** the Python distribution and CLI identifiers still retain the upstream `streamdock-n3-linux` and `streamdock-n3` names, labeled as upstream legacy. Naming and versioning are resolved for v0.3.0: the distribution version is now `0.3.0`, and the inherited `0.2.5` lineage — which was not an N3 AI Deck release — is recorded in the CHANGELOG.
 
 ## Safe read-only discovery (M1)
 

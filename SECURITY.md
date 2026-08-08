@@ -16,4 +16,4 @@ Reports involving udev, HID initialization, brightness, or LCD writes must state
 
 ## Supported versions
 
-The current `main` branch and the `v0.2.0` release receive security fixes; the project remains an Early Preview.
+The current `main` branch and the `v0.3.0` release receive security fixes; the project remains an Early Preview.
