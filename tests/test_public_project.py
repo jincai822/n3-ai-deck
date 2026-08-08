@@ -483,9 +483,9 @@ def test_readmes_explain_inherited_distribution_identifiers() -> None:
     for identifier in ("streamdock-n3-linux", "streamdock-n3"):
         assert identifier in english
         assert identifier in chinese
-    assert "the distribution version is now `0.1.0`" in english
+    assert "the distribution version is now `0.2.0`" in english
     assert "not an N3 AI Deck release" in english
-    assert "`v0.1.0` 之前" in chinese
+    assert "`v0.2.0` 之前" in chinese
     assert "并非 N3 AI Deck 的发布版本" in chinese
 
 

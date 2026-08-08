@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.2.0 — 2026-08-08
+
+### Added
+
+- G8 background service (`n3-ai-deck-service`): a systemd user service that
+  re-resolves the approved vendor node every iteration (never cached), runs
+  bounded live sessions back-to-back, reconnects with a capped back-off
+  schedule (`2 s → 5 s → 10 s → 30 s`) after an absent node, a disconnected
+  session, or a permission-rejected session, and stops cleanly on SIGTERM.
+- Owner-gated installers: `--print-unit` prints the systemd user unit and
+  `--print-udev-rule` prints the USB-device-level udev rule for automatic
+  `uaccess`; both print only and never install or write system state.
+- P5 owner-present validation record for G8
+  (`docs/validation/2026-08-05-g8-service.md`): unplug/replug recovery,
+  journald log delivery, a real `uv tool install` self-install with the stock
+  unit under systemd, and the automatic `uaccess` end-to-end test after the
+  corrected udev rule.
+
+### Changed
+
+- Distribution version bumped from `0.1.0` to `0.2.0`.
+
+### Fixed
+
+- `n3-ai-deck-service` now backs off on permission-rejected and errored
+  sessions instead of retrying in a tight loop (hot-loop fix).
+- stdout is configured line-buffered at CLI startup in the service and live
+  CLIs, so journald receives every log line immediately instead of in
+  block-buffered bursts.
+- The generated udev rule now matches at the USB device level only
+  (`idVendor`/`idProduct` + `TAG+="uaccess"`): a rule's `ATTRS{}` matches may
+  draw from the event device plus exactly one parent device, so the interface
+  attributes were never combinable with the device attributes in one line.
+  The recommended filename is `60-n3-ai-deck.rules` (sorts before
+  `73-seat-late.rules`, where the `uaccess` builtin takes effect).
+
 ## 0.1.0 — 2026-08-05
 
 ### Added
