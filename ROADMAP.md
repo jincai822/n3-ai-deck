@@ -126,14 +126,18 @@ snapshots are validation context, not state authority.
 
 ## M6 — Background service (G8)
 
-**Status:** Implemented — P5 owner-present validation pending
+**Status:** Complete — P5 owner-present validation recorded
 
 - [x] Background service with in-process reconnect, bounded sessions, and a
   clean SIGTERM stop. Evidence:
   [the G8 service design](docs/superpowers/specs/2026-08-05-g8-service-design.md),
-  approval reference `owner:2026-08-05:g8-service`. `n3-ai-deck-service`
+  approval reference `owner:2026-08-05:g8-service`, and
+  [the G8 service validation record](docs/validation/2026-08-05-g8-service.md),
+  approval reference `owner:2026-08-08:g8-service`. `n3-ai-deck-service`
   re-resolves the approved vendor node every iteration (never cached),
   reconnects with capped backoff after an absent node or a disconnected
   session, and prints the owner-gated systemd user unit and udev rules
-  without installing anything. The P5 owner-present validation record will be
-  linked here when complete.
+  without installing anything. The P5 validation record covers unplug/replug
+  recovery, journald log delivery, a real `uv tool install` self-install with
+  the stock unit under systemd, and the corrected device-level udev rule with
+  the automatic `uaccess` end-to-end test.
