@@ -50,8 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         print("input map:")
         for key, name in BUTTON_NAMES.items():
             print(f"  button {key}: {name}")
-        for key, name in KNOB_NAMES.items():
-            print(f"  {key}: {name} press + left/right rotation")
+        for knob_key, name in KNOB_NAMES.items():
+            print(f"  {knob_key}: {name} press + left/right rotation")
 
     stop = False
 

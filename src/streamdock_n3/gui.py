@@ -1126,7 +1126,10 @@ class ThemeLoader:
             )
 
     def _on_changed(self, *_args: Any) -> None:
-        GLib.timeout_add(150, lambda: (self.apply(), False)[1])
+        def _apply_and_return() -> bool:
+            self.apply()
+            return False
+        GLib.timeout_add(150, _apply_and_return)
 
 
 # ----- application --------------------------------------------------------

@@ -7,8 +7,12 @@ Build N3 AI Deck as a local-first AI productivity console for Mirabox/妙联宝 
 ## Current hardware status
 
 - The connected N3 V3.0 identifies as USB `6602:1000`.
-- Detection evidence exists, but initialization, controls, brightness, and LCD writes are not yet validated for this variant.
-- Treat all hardware writes as manual-gate operations.
+- M2 hardware controls (G0–G7) are complete and validated on the owner's unit:
+  adapter contracts, candidate profile approval, input observation, init trio,
+  brightness, all six LCD keys, and the calibrated key map.
+- M3 action engine, M4 AI workflow, and G8 background service are complete.
+- `6602:1000` remains an owner-reported candidate whose identity is not
+  independently confirmed; treat hardware writes as manual-gate operations.
 
 ## Required commands
 

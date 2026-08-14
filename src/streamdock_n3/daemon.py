@@ -28,7 +28,7 @@ from streamdock_n3.icons import FALLBACK_COLORS, make_icon, parse_color
 try:
     from evdev import InputDevice, categorize, ecodes, list_devices  # type: ignore
 except ImportError:  # pragma: no cover
-    InputDevice = None  # type: ignore[assignment]
+    InputDevice = None  # type: ignore[assignment,misc]
     categorize = None  # type: ignore[assignment]
     ecodes = None  # type: ignore[assignment]
     list_devices = None  # type: ignore[assignment]
@@ -194,7 +194,7 @@ def evdev_worker(stop: threading.Event, actions: dict[str, Any], dry_run: bool) 
                     if event.type != ecodes.EV_KEY:
                         continue
                     key = categorize(event)
-                    keycodes = key.keycode if isinstance(key.keycode, list) else [key.keycode]
+                    keycodes = key.keycode if isinstance(key.keycode, list) else [key.keycode]  # type: ignore[union-attr]
                     for keycode in keycodes:
                         mapped = evdev_event_key(str(keycode), event.value)
                         print(f"evdev {keycode} value={event.value} [{mapped}]", flush=True)

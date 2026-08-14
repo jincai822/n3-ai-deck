@@ -74,7 +74,7 @@ def evdev_worker(stop: threading.Event) -> None:
                 for event in dev.read():
                     if event.type == ecodes.EV_KEY:
                         key = categorize(event)
-                        print(f"evdev {dev.path}: {key.keycode} value={event.value}", flush=True)
+                        print(f"evdev {dev.path}: {key.keycode} value={event.value}", flush=True)  # type: ignore[union-attr]
                     elif event.type != ecodes.EV_SYN:
                         print(
                             f"evdev {dev.path}: type={event.type} "
